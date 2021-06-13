@@ -1,3 +1,6 @@
 /.vscode
 /data
 test.sh
+ann_train.sh
+/__pycache__
+/Ann_train_exp
