@@ -49,3 +49,38 @@ class SpikieFC(nn.Module):
 
     def forward(self, x):
         return torch.matmul(x, self.W)
+
+class SpikingVGG(nn.Module):
+    def __init__(self, chckpoint) -> None:
+        super().__init__()
+        self.num_class = 10
+        self.blockparams = ((3, 64), (64, 128), (128, 256), (256, 512), (512, 512))
+
+        self.block_concat = []
+        for b in self.blockparams:
+            self.block_concat.extend([
+                nn.Conv2d(b[0], b[1], kernel_size=3, padding=1),
+                nn.BatchNorm2d(b[1]),
+                nn.ReLU(inplace=True),
+                nn.BatchNorm2d(b[1]),
+                nn.Conv2d(b[1], b[1], kernel_size=3, padding=1),
+                nn.BatchNorm2d(b[1]),
+                nn.ReLU(inplace=True),
+                nn.MaxPool2d(kernel_size=2, stride=2)
+            ])
+
+        self.classifir_concat = [
+            nn.Linear(512, 512),
+            nn.ReLU(True),
+            nn.Linear(512, 32),
+            nn.ReLU(True),
+            nn.Linear(32, self.num_class),
+        ]
+
+        self.neurons = []
+
+    def forward(self, x):
+        self.neurons.append()
+        for b in self.block_concat:
+            x = b(x)
+            self.neurons
