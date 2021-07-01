@@ -120,20 +120,27 @@ class Vgg16(nn.Module):
 
 
 class SpikingLinear(nn.Module):
-    def __init__(self, N_in, N_out, initW=None, Vth=0.5, Vres=0.0):
+    def __init__(self, N_in, N_out, initW=None, initB=None, device=None, Vth=0.5, Vres=0.0):
         super().__init__()
+        self.device = device
 
         self.n = None
         self.Vth = Vth
 
         self.linear = nn.Linear(N_in, N_out)
-        self.linear.bias = nn.Parameter(torch.zeros(N_out))
         if initW is not None:
             self.linear.weight = nn.Parameter(initW)
         else:
-            self.W = nn.Parameter(torch.Tensor(
+            self.linear.weight = nn.Parameter(torch.Tensor(
                 np.zeros(N_out, N_in)
             ))
+
+        if initB is not None:
+            self.linear.bias = nn.Parameter(initB)
+        else:
+            self.linear.weight = nn.Parameter(
+                torch.zeros(N_out)
+            )
 
     def set_neurons(self, x):
         n_tmp = self.linear(x)
@@ -141,9 +148,12 @@ class SpikingLinear(nn.Module):
 
         return self.n
 
+    def reset_batch_neurons(self, bsize):
+        self.n = torch.zeros(bsize, self.n.size()[1])
+        self.n = self.n.to(self.device)
+
     def forward(self, x):
-        self.n += self.conv2d(x)
-        print(self.n.size())
+        self.n += self.linear(x)
         spike = torch.where(self.n > self.Vth, 1.0, -1.0)
         self.n[self.n > self.Vth] -= self.Vth
 
@@ -151,8 +161,9 @@ class SpikingLinear(nn.Module):
 
 
 class SpikingConv2d(nn.Module):
-    def __init__(self, N_in_ch, N_out_ch, kernel_size=3, padding=1, initW=None, Vth=0.5, Vres=0.0):
+    def __init__(self, N_in_ch, N_out_ch, kernel_size=3, padding=1, initW=None, initB=None, device=None, Vth=0.5, Vres=0.0):
         super().__init__()
+        self.device = device
 
         self.n = None
         self.Vth = Vth
@@ -169,8 +180,12 @@ class SpikingConv2d(nn.Module):
         self.n = torch.zeros_like(n_tmp)
 
         return self.n
+
+    def reset_batch_neurons(self, bsize):
+        self.n = torch.zeros(bsize, self.n.size()[1], self.n.size()[2], self.n.size()[3])
+        self.n = self.n.to(self.device)
     
-    def forward(self, x, pred=True):
+    def forward(self, x):
         self.n += self.conv2d(x)
         spike = torch.where(self.n > self.Vth, 1.0, -1.0)
         self.n[self.n > self.Vth] -= self.Vth
@@ -179,7 +194,7 @@ class SpikingConv2d(nn.Module):
 
 
 class SpikingVGG16(nn.Module):
-    def __init__(self, stdict, block1, block2, classifier, set_x):
+    def __init__(self, stdict, block1, block2, classifier, set_x, device):
         super().__init__()
         self.num_class = 10
         self.blockparams1 = block1
@@ -189,24 +204,24 @@ class SpikingVGG16(nn.Module):
         block_concat = []
         for b in self.blockparams1:
             block_concat.extend([
-                SpikingConv2d(b[0], b[1], kernel_size=3, padding=1, initW=stdict[b[2]]),
-                SpikingConv2d(b[1], b[1], kernel_size=3, padding=1, initW=stdict[b[3]]),
+                SpikingConv2d(b[0], b[1], kernel_size=3, padding=1, initW=stdict[b[2]], initB=stdict[b[3]], device=device),
+                SpikingConv2d(b[1], b[1], kernel_size=3, padding=1, initW=stdict[b[4]], initB=stdict[b[5]], device=device),
                 nn.MaxPool2d(kernel_size=2, stride=2)
             ])
         for b in self.blockparams2:
             block_concat.extend([
-                SpikingConv2d(b[0], b[1], kernel_size=3, padding=1, initW=stdict[b[2]]),
-                SpikingConv2d(b[1], b[1], kernel_size=3, padding=1, initW=stdict[b[3]]),
-                SpikingConv2d(b[1], b[1], kernel_size=3, padding=1, initW=stdict[b[4]]),
+                SpikingConv2d(b[0], b[1], kernel_size=3, padding=1, initW=stdict[b[2]], initB=stdict[b[3]], device=device),
+                SpikingConv2d(b[1], b[1], kernel_size=3, padding=1, initW=stdict[b[4]], initB=stdict[b[5]], device=device),
+                SpikingConv2d(b[1], b[1], kernel_size=3, padding=1, initW=stdict[b[6]], initB=stdict[b[7]], device=device),
                 nn.MaxPool2d(kernel_size=2, stride=2)
             ])
 
         self.block = nn.Sequential(*block_concat)
 
         self.classifier_concat = nn.Sequential(
-            SpikingLinear(512, 512, initW=stdict[self.classifier[0]]),
-            SpikingLinear(512, 32, initW=stdict[self.classifier[1]]),
-            SpikingLinear(32, self.num_class, initW=stdict[self.classifier[2]]),
+            SpikingLinear(512, 512, initW=stdict[self.classifier[0]], initB=stdict[self.classifier[1]], device=device),
+            SpikingLinear(512, 32, initW=stdict[self.classifier[2]], initB=stdict[self.classifier[3]], device=device),
+            SpikingLinear(32, self.num_class, initW=stdict[self.classifier[4]], initB=stdict[self.classifier[5]], device=device),
         )
 
         self._set_neurons(set_x)
@@ -224,9 +239,17 @@ class SpikingVGG16(nn.Module):
                     before_linear = True
                 x = m.set_neurons(x)
 
-    def forward(self, x, init=False):
-        x = self.block(x, init)
-        output = self.classifier_concat(x, init)
+    def reset(self, bsize):
+        for m in self.modules():
+            if isinstance(m, SpikingConv2d):
+                m.reset_batch_neurons(bsize)
+            elif isinstance(m, SpikingLinear):
+                m.reset_batch_neurons(bsize)
+
+    def forward(self, x):
+        x = self.block(x)
+        x = x.view(x.size(0), -1)
+        output = self.classifier_concat(x)
 
         return output
 
@@ -244,5 +267,7 @@ if __name__ == "__main__":
         (512, 512, 'block.24.weight', 'block.26.weight', 'block.28.weight')
     )
     classifier = ('classifier.0.weight', 'classifier.2.weight', 'classifier.4.weight')
+    device =  torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(stdict.keys())
     inp = torch.ones(1, 3, 32, 32)
-    model = SpikingVGG16(stdict, block1, block2, classifier, inp)
+    model = SpikingVGG16(stdict, block1, block2, classifier, inp, device)
