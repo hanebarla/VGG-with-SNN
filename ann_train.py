@@ -6,7 +6,7 @@ from torchvision.datasets import CIFAR10
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from model import Vgg16
+from model import Vgg16_BN
 from utils import save_checkpoint
 
 
@@ -32,7 +32,7 @@ def main():
     trainset = CIFAR10(root='./data', train=True, download=True, transform=transform)
     testset = CIFAR10(root='./data', train=False, download=True, transform=transform)
 
-    model = Vgg16()
+    model = Vgg16_BN()
     if torch.cuda.device_count() > 1:
         print("You can use {} GPUs!".format(torch.cuda.device_count()))
         model = nn.DataParallel(model)
