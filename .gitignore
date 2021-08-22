@@ -1,8 +1,11 @@
+*.pth.tar
 /.vscode
 /data
 test.sh
 ann_train.sh
 /__pycache__
 /Ann_train_exp
+/SNN_Test_Results
 /0624
 /0701
+/0822

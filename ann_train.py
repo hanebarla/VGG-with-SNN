@@ -6,12 +6,12 @@ from torchvision.datasets import CIFAR10
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from model import Vgg16_BN
+from model import Vgg16_BN, Vgg16
 from utils import save_checkpoint
 
 
 parser = argparse.ArgumentParser(description='PyTorch CANNet2s')
-parser.add_argument('--epochs', default=200, type=int)
+parser.add_argument('--epochs', default=100, type=int)
 parser.add_argument('--batchsize', default=128, type=int)
 parser.add_argument('--num_workers', default=8, type=int)
 parser.add_argument('--lr', default=1e-4, type=float)
@@ -32,7 +32,7 @@ def main():
     trainset = CIFAR10(root='./data', train=True, download=True, transform=transform)
     testset = CIFAR10(root='./data', train=False, download=True, transform=transform)
 
-    model = Vgg16_BN()
+    model = Vgg16()
     if torch.cuda.device_count() > 1:
         print("You can use {} GPUs!".format(torch.cuda.device_count()))
         model = nn.DataParallel(model)
