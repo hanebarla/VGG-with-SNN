@@ -14,9 +14,9 @@ parser.add_argument('--scale', default=1.0, type=float)
 parser.add_argument('--vth', default=0.9, type=float)
 parser.add_argument('--vres', default=0.0, type=float)
 parser.add_argument('--timelength', default=100, type=int)
-parser.add_argument('--load_weight', default="/home/thabara/Documents/VGG-with-SNN/0822/model_best.pth.tar")
+parser.add_argument('--load_weight', default="0822/model_best.pth.tar")
 parser.add_argument('--load_normalized_weight', default=None)
-parser.add_argument('--savefolder', default="/home/thabara/Documents/VGG-with-SNN/SNN_Test_Results/")
+parser.add_argument('--savefolder', default="SNN_Test_Results/")
 
 
 def CW_Normalize(args, model, trainset, device):
@@ -58,19 +58,24 @@ def spike_test(args, trainset, spikeset, device):
     model = SpikingVGG16(stdict, block1, block2, classifier, inp, device)
     model.to(device)
 
-    """
+
     if args.load_normalized_weight is None:
         model = CW_Normalize(args, model, trainset, device)
         torch.save(model.state_dict(), "normalized.pth.tar")
     else:
         print("=> Already Normalized")
-    """
+
 
     spikeloader = torch.utils.data.DataLoader(spikeset, batch_size=args.batchsize)
-    for sp in spikeloader:
-        outspike = torch.zeros(args.batchsize, args.timelength, 10)
+
+    dlen = len(spikeset)
+    acc = 0
+    for i, sp in enumerate(spikeloader):
+        outspike = torch.zeros(sp[0].size()[0], args.timelength, 10)
+        labels = sp[1]
         model.reset(sp[0].size()[0])  # batch size to argument
-        
+        print("{} start. Voltage reseted".format(i))
+
         # time step proccess
         for i in range(args.timelength):
             spike = sp[0][:, i, :, :, :]
@@ -78,11 +83,20 @@ def spike_test(args, trainset, spikeset, device):
             with torch.no_grad():
                 out = model(spike)
             outspike[:, i, :] = out
+            # break
+
+        model.FireCount()
+        break
 
         spikecount = torch.sum(outspike, axis=1)
-        print(spikecount.size())
+        spikecount_argmax = torch.max(spikecount, dim=1)
+        acc_tensor = torch.zeros_like(labels)
+        acc_tensor[spikecount_argmax==labels] = 1
 
-        break
+        acc += acc_tensor.sum().item()
+
+    acc /= dlen
+    print("Acc: {}".format(acc))
 
 
 
@@ -91,9 +105,13 @@ def main():
     args.savefolder = os.path.join(args.savefolder, date2foldername())
     print(args.savefolder)
 
-    transform = transforms.ToTensor()
-    trainset = CIFAR10(root='./data', train=True, download=False, transform=transform)
-    testset = CIFAR10(root='./data', train=False, download=False, transform=transform)
+    traintransform = transforms.Compose(
+        [transforms.ToTensor(),
+         transforms.Normalize((0.5, 0.5 ,0.5), (0.5, 0.5, 0.5))]
+    )
+    testtransform = transforms.ToTensor()
+    trainset = CIFAR10(root='./data', train=True, download=False, transform=traintransform)
+    testset = CIFAR10(root='./data', train=False, download=False, transform=testtransform)
     Spikes = SpikeEncodeDatasets(testset, timelength=args.timelength)
     device =  torch.device("cuda" if torch.cuda.is_available() else "cpu") 
     print(device)

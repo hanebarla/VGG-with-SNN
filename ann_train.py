@@ -10,7 +10,7 @@ from model import Vgg16_BN, Vgg16
 from utils import save_checkpoint
 
 
-parser = argparse.ArgumentParser(description='PyTorch CANNet2s')
+parser = argparse.ArgumentParser(description='PyTorch SNN')
 parser.add_argument('--epochs', default=100, type=int)
 parser.add_argument('--batchsize', default=128, type=int)
 parser.add_argument('--num_workers', default=8, type=int)
@@ -25,6 +25,12 @@ def main():
     torch.backends.cudnn.benchmark = True
     best_pred = 0
 
+    """
+    transform = transforms.Compose(
+        [transforms.ToTensor(),
+         transforms.Normalize((0.49139968, 0.48215827 ,0.44653124), (0.24703233, 0.24348505, 0.26158768))]
+    )
+    """
     transform = transforms.Compose(
         [transforms.ToTensor(),
          transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]

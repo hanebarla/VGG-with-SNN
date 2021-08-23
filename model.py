@@ -1,4 +1,4 @@
-from os import name
+from os import isatty
 import numpy as np
 import torch
 import torch.nn as nn
@@ -159,6 +159,9 @@ class SpikingLinear(nn.Module):
         self.n_Vth = - Vth / alpha
         self.scale = scale
         self.peak = 1.0
+        
+        self.firecout = 0
+        self.firemax = 0
 
         self.lambda_before = 0.0
         self.lambda_after = 0.0
@@ -188,6 +191,9 @@ class SpikingLinear(nn.Module):
         self.n = torch.zeros(bsize, self.n.size()[1])
         self.n = self.n.to(self.device)
 
+        self.firecout = 0
+        self.firemax = 0
+
     def get_lambda(self, x):
         lambda_tmp = torch.max(x)
         if lambda_tmp > self.lambda_before:
@@ -212,6 +218,11 @@ class SpikingLinear(nn.Module):
         spike[self.n < self.n_Vth] = -self.peak
         spike.to(self.device)
 
+        peak_count = torch.sum(torch.abs(spike)).item()
+        peak_max_count = torch.sum(torch.ones_like(spike)).item()
+        self.firecout += peak_count
+        self.firemax += peak_max_count
+
         self.n[self.n > self.Vth] -= self.Vth
         self.n[self.n < self.n_Vth] -= self.n_Vth
 
@@ -219,6 +230,28 @@ class SpikingLinear(nn.Module):
 
 
 class SpikingConv2d(nn.Module):
+    """
+    Spiking Conv2d layer
+
+    Parameters
+    ----------
+    N_in : int
+        input channel size
+    N_out : int
+        output channel size
+    initW : 
+        Pretrained layer's weight
+    init B :
+        Pretrained layer's Bias
+    device : String
+        cpu or gpu
+    Vth : float
+        Spike threshold
+    Vres : float
+        reset voltage
+    alpha : float
+        slope of LeakyRelu in negative area
+    """
     def __init__(self, N_in_ch, N_out_ch, kernel_size=3, padding=1, initW=None, initB=None, device=None, Vth=0.5, Vres=0.0, alpha=0.01, scale=1.0, out_h=1, out_w=1):
         super().__init__()
         self.device = device
@@ -229,6 +262,9 @@ class SpikingConv2d(nn.Module):
         self.n_Vth = - Vth / alpha
         self.scale = scale
         self.peak = 1.0
+
+        self.firecout = 0
+        self.firemax = 0
 
         self.lambda_before = torch.zeros(N_in_ch).to(device)
         self.lambda_after = torch.zeros(N_out_ch).to(device)
@@ -283,6 +319,9 @@ class SpikingConv2d(nn.Module):
     def reset_batch_neurons(self, bsize):
         self.n = torch.zeros(bsize, self.n.size()[1], self.n.size()[2], self.n.size()[3])
         self.n = self.n.to(self.device)
+
+        self.firecout = 0
+        self.firemax = 0
     
     def forward(self, x):
         self.n += self.conv2d(x)
@@ -291,6 +330,11 @@ class SpikingConv2d(nn.Module):
         spike[self.n > self.Vth] = self.peak
         spike[self.n < self.n_Vth] = -self.peak
         spike.to(self.device)
+
+        peak_count = torch.sum(torch.abs(spike)).item()
+        peak_max_count = torch.sum(torch.ones_like(spike)).item()
+        self.firecout += peak_count
+        self.firemax += peak_max_count
 
         self.n[self.n > self.Vth] -= self.Vth
         self.n[self.n < self.n_Vth] -= self.n_Vth
@@ -316,14 +360,24 @@ class SpikingAvgPool2d(nn.Module):
         self.n = None
         self.peak = float(1.0)
 
+        self.firecout = 0
+        self.firemax = 0
+
     def set_neurons(self, x):
         n_tmp = self.AvgPool2d(x)
         self.n = torch.zeros_like(n_tmp)
         return n_tmp
 
+    # Spiking AveratePool2d is not need to get lambda, but other layer needs.
+    def get_lambda(self, x):
+        return self.AvgPool2d(x)
+
     def reset_batch_neurons(self, bsize):
         self.n = torch.zeros(bsize, self.n.size()[1], self.n.size()[2], self.n.size()[3])
         self.n = self.n.to(self.device)
+
+        self.firecout = 0
+        self.firemax = 0
 
     def forward(self, x):
         self.n += self.AvgPool2d(x)
@@ -333,6 +387,11 @@ class SpikingAvgPool2d(nn.Module):
         spike[self.n < -self.Vth] = -self.peak # avepool2dの負方向のスパイクの閾値はとりあえず-Vthに
         spike.to(self.device)
 
+        peak_count = torch.sum(torch.abs(spike)).item()
+        peak_max_count = torch.sum(torch.ones_like(spike)).item()
+        self.firecout += peak_count
+        self.firemax += peak_max_count
+
         self.n[self.n > self.Vth] -= self.Vth
         self.n[self.n < -self.Vth] += self.Vth
 
@@ -340,7 +399,7 @@ class SpikingAvgPool2d(nn.Module):
 
 
 class SpikingVGG16(nn.Module):
-    def __init__(self, stdict, block1, block2, classifier, set_x, device, Vth=0.9, Vres=0.0, scale=1.0):
+    def __init__(self, stdict, block1, block2, classifier, set_x, device, Vth=0.5, Vres=0.0, scale=1.0):
         super().__init__()
         self.num_class = 10
         self.blockparams1 = block1
@@ -376,7 +435,7 @@ class SpikingVGG16(nn.Module):
         before_linear = False
         for m in self.modules():
             if isinstance(m, SpikingAvgPool2d):
-                x = m(x)
+                x = m.get_lambda(x)
             elif isinstance(m, SpikingConv2d):
                 x = m.get_lambda(x)
             elif isinstance(m, SpikingLinear):
@@ -413,6 +472,21 @@ class SpikingVGG16(nn.Module):
                 m.reset_batch_neurons(bsize)
             elif isinstance(m, SpikingAvgPool2d):
                 m.reset_batch_neurons(bsize)
+
+    def FireCount(self):
+        firecnt = 0
+        firemax = 0
+        for m in self.modules():
+            if isinstance(m, SpikingAvgPool2d):
+                firecnt += m.firecout
+                firemax += m.firemax
+            elif isinstance(m, SpikingConv2d):
+                firecnt += m.firecout
+                firemax += m.firemax
+            elif isinstance(m, SpikingLinear):
+                firecnt += m.firecout
+                firemax += m.firemax
+        print("Fire Count: {}, Fire Max {}, Fire Rate {}".format(firecnt, firemax, firecnt / firemax))
 
     def forward(self, x):
         x = self.block(x)
