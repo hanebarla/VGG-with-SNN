@@ -25,7 +25,7 @@ class Vgg16_BN(nn.Module):
                 nn.Conv2d(b[1], b[1], kernel_size=3, padding=1),
                 nn.BatchNorm2d(b[1]),
                 nn.LeakyReLU(inplace=True),
-                nn.MaxPool2d(kernel_size=2, stride=2)
+                nn.AvgPool2d(kernel_size=2, stride=2)
             ])
         """
         for b in self.blockparams1:
@@ -36,7 +36,7 @@ class Vgg16_BN(nn.Module):
                 nn.Conv2d(b[1], b[1], kernel_size=3, padding=1),
                 nn.BatchNorm2d(b[1]),
                 nn.LeakyReLU(inplace=True),
-                nn.MaxPool2d(kernel_size=2, stride=2)
+                nn.AvgPool2d(kernel_size=2, stride=2)
             ])
         for b in self.blockparams2:
             block_concat.extend([
@@ -49,7 +49,7 @@ class Vgg16_BN(nn.Module):
                 nn.Conv2d(b[1], b[1], kernel_size=3, padding=1),
                 nn.BatchNorm2d(b[1]),
                 nn.LeakyReLU(inplace=True),
-                nn.MaxPool2d(kernel_size=2, stride=2)
+                nn.AvgPool2d(kernel_size=2, stride=2)
             ])
 
         self.block = nn.Sequential(*block_concat)
@@ -85,7 +85,7 @@ class Vgg16(nn.Module):
                 nn.LeakyReLU(inplace=True),
                 nn.Conv2d(b[1], b[1], kernel_size=3, padding=1),
                 nn.LeakyReLU(inplace=True),
-                nn.MaxPool2d(kernel_size=2, stride=2)
+                nn.AvgPool2d(kernel_size=2, stride=2)
             ])
         for b in self.blockparams2:
             block_concat.extend([
@@ -95,7 +95,7 @@ class Vgg16(nn.Module):
                 nn.LeakyReLU(inplace=True),
                 nn.Conv2d(b[1], b[1], kernel_size=3, padding=1),
                 nn.LeakyReLU(inplace=True),
-                nn.MaxPool2d(kernel_size=2, stride=2)
+                nn.AvgPool2d(kernel_size=2, stride=2)
             ])
 
         self.block = nn.Sequential(*block_concat)
@@ -166,6 +166,11 @@ class SpikingLinear(nn.Module):
         self.lambda_before = 0.0
         self.lambda_after = 0.0
 
+        if alpha == 0:
+            self.activate = nn.ReLU()
+        else:
+            self.activate = nn.LeakyReLU()
+
         self.linear = nn.Linear(N_in, N_out)
         if initW is not None:
             self.linear.weight = nn.Parameter(initW)
@@ -200,6 +205,7 @@ class SpikingLinear(nn.Module):
             self.lambda_before = lambda_tmp
 
         n_tmp = self.linear(x)
+        n_tmp = self.activate(n_tmp)
         lambda_tmp = torch.max(n_tmp)
         if lambda_tmp > self.lambda_after:
             self.lambda_after = lambda_tmp
@@ -207,8 +213,9 @@ class SpikingLinear(nn.Module):
         return n_tmp
 
     def maxactivation_normalize(self):
+        # In fact, both lambda should multiplicate 0.99, but they are divided by each one.
         self.linear.weight.data = self.scale * self.linear.weight.data / self.lambda_after * self.lambda_before
-        self.linear.bias.data = self.scale * self.linear.bias.data / self.lambda_after
+        self.linear.bias.data = self.scale * self.linear.bias.data / (self.lambda_after * 0.99)
 
     def forward(self, x):
         self.n += self.linear(x)
@@ -269,6 +276,11 @@ class SpikingConv2d(nn.Module):
         self.lambda_before = torch.zeros(N_in_ch).to(device)
         self.lambda_after = torch.zeros(N_out_ch).to(device)
 
+        if alpha == 0:
+            self.activate = nn.ReLU()
+        else:
+            self.activate = nn.LeakyReLU()
+
         self.conv2d = nn.Conv2d(N_in_ch, N_out_ch, kernel_size=kernel_size, padding=padding)
         self.conv2d.bias = nn.Parameter(torch.zeros(N_out_ch))
         if initW is not None:
@@ -300,6 +312,7 @@ class SpikingConv2d(nn.Module):
         self.lambda_before = torch.where(self.lambda_before < x_ch_max, x_ch_max, self.lambda_before)
 
         n_tmp = self.conv2d(x)
+        n_tmp = self.activate(n_tmp)
         n_tmp_reshaped = n_tmp.view(n_tmp.size(0), n_tmp.size(1), -1) # size: (batch_size, channel_size, w*h)
         batch_ch_max, _ = torch.max(n_tmp_reshaped, 2) # size: (batch_size, channel_size)
         ch_max, _ = torch.max(batch_ch_max, 0) # size(channel_size)
@@ -312,8 +325,9 @@ class SpikingConv2d(nn.Module):
         inp_ch = self.lambda_before.size(0)
 
         for i in range(out_ch):
-            self.conv2d.bias.data[i] = self.scale * self.conv2d.bias.data[i] / self.lambda_after[i]
+            self.conv2d.bias.data[i] = self.scale * self.conv2d.bias.data[i] / (self.lambda_after[i] * 0.99)
             for j in range(inp_ch):
+                 # In fact, both lambda should multiplicate 0.99, but they are divided by each one.
                 self.conv2d.weight.data[i, j, :, :] = self.scale * self.conv2d.weight.data[i, j, :, :] / self.lambda_after[i] * self.lambda_before[j]
 
     def reset_batch_neurons(self, bsize):
@@ -411,14 +425,16 @@ class SpikingVGG16(nn.Module):
             block_concat.extend([
                 SpikingConv2d(b[0], b[1], kernel_size=3, padding=1, initW=stdict[b[2]], initB=stdict[b[3]], device=device, Vth=Vth, Vres=Vres, scale=scale),
                 SpikingConv2d(b[1], b[1], kernel_size=3, padding=1, initW=stdict[b[4]], initB=stdict[b[5]], device=device, Vth=Vth, Vres=Vres, scale=scale),
-                SpikingAvgPool2d(kernel_size=2, stride=2, device=device, Vth=Vth, Vres=Vres)  # Use Avepool2d instead of nn.MaxPool2d(kernel_size=2, stride=2) in SNN
+                nn.AvgPool2d(kernel_size=2, stride=2),
+                # SpikingAvgPool2d(kernel_size=2, stride=2, device=device, Vth=Vth, Vres=Vres)  # Use Avepool2d instead of nn.MaxPool2d(kernel_size=2, stride=2) in SNN
             ])
         for b in self.blockparams2:
             block_concat.extend([
                 SpikingConv2d(b[0], b[1], kernel_size=3, padding=1, initW=stdict[b[2]], initB=stdict[b[3]], device=device, Vth=Vth, Vres=Vres, scale=scale),
                 SpikingConv2d(b[1], b[1], kernel_size=3, padding=1, initW=stdict[b[4]], initB=stdict[b[5]], device=device, Vth=Vth, Vres=Vres, scale=scale),
                 SpikingConv2d(b[1], b[1], kernel_size=3, padding=1, initW=stdict[b[6]], initB=stdict[b[7]], device=device, Vth=Vth, Vres=Vres, scale=scale),
-                SpikingAvgPool2d(kernel_size=2, stride=2, device=device, Vth=Vth, Vres=Vres)  # Use Avepool2d instead of nn.MaxPool2d(kernel_size=2, stride=2) in SNN
+                nn.AvgPool2d(kernel_size=2, stride=2),
+                # SpikingAvgPool2d(kernel_size=2, stride=2, device=device, Vth=Vth, Vres=Vres)  # Use Avepool2d instead of nn.MaxPool2d(kernel_size=2, stride=2) in SNN
             ])
 
         self.block = nn.Sequential(*block_concat)
@@ -428,21 +444,33 @@ class SpikingVGG16(nn.Module):
             SpikingLinear(512, 32, initW=stdict[self.classifier[2]], initB=stdict[self.classifier[3]], device=device, Vth=Vth, Vres=Vres, scale=scale),
             SpikingLinear(32, self.num_class, initW=stdict[self.classifier[4]], initB=stdict[self.classifier[5]], device=device, Vth=Vth, Vres=Vres, scale=scale),
         )
+        """
+        for m in self.modules():
+            print(m)
+        """
 
         self._set_neurons(set_x) # set membrem voltage
 
-    def calculate_lambda(self, x):
+    def _manual_forward(self, x, mode="set_neurons"):
         before_linear = False
         for m in self.modules():
             if isinstance(m, SpikingAvgPool2d):
-                x = m.get_lambda(x)
+                x = getattr(m, mode)(x)
+            elif isinstance(m, nn.AvgPool2d):
+                x = m(x)
             elif isinstance(m, SpikingConv2d):
-                x = m.get_lambda(x)
+                x = getattr(m, mode)(x)
             elif isinstance(m, SpikingLinear):
                 if not before_linear:
                     x = x.view(x.size(0), -1)
                     before_linear = True
-                x = m.get_lambda(x)
+                x = getattr(m, mode)(x)
+
+        return x
+
+    def calculate_lambda(self, x):
+        out = self._manual_forward(x, mode="get_lambda")
+        return out
 
     def channel_wised_normlization(self):
         for m in self.modules():
@@ -452,17 +480,7 @@ class SpikingVGG16(nn.Module):
                 m.maxactivation_normalize()
 
     def _set_neurons(self, x):
-        before_linear = False
-        for m in self.modules():
-            if isinstance(m, SpikingAvgPool2d):
-                x = m.set_neurons(x)
-            elif isinstance(m, SpikingConv2d):
-                x = m.set_neurons(x)
-            elif isinstance(m, SpikingLinear):
-                if not before_linear:
-                    x = x.view(x.size(0), -1)
-                    before_linear = True
-                x = m.set_neurons(x)
+        _ = self._manual_forward(x, mode="set_neurons")
 
     def reset(self, bsize):
         for m in self.modules():

@@ -11,23 +11,35 @@ from utils import SpikeEncodeDatasets, date2foldername
 parser = argparse.ArgumentParser(description='PyTorch CANNet2s')
 parser.add_argument('--batchsize', default=128, type=int)
 parser.add_argument('--scale', default=1.0, type=float)
-parser.add_argument('--vth', default=0.9, type=float)
-parser.add_argument('--vres', default=0.0, type=float)
+parser.add_argument('--Vth', default=1.0, type=float)
+parser.add_argument('--Vres', default=0.0, type=float)
 parser.add_argument('--timelength', default=100, type=int)
-parser.add_argument('--load_weight', default="0822/model_best.pth.tar")
+parser.add_argument('--load_weight', default="0826/model_best.pth.tar")
 parser.add_argument('--load_normalized_weight', default=None)
 parser.add_argument('--savefolder', default="SNN_Test_Results/")
 
 
+# Calculate lambda(max activations), and channel-wise Normalize
 def CW_Normalize(args, model, trainset, device):
+    dleng = len(trainset)
+    acc = 0
     trainloader = torch.utils.data.DataLoader(trainset, batch_size=args.batchsize)
 
     for data in trainloader:
         with torch.no_grad():
-            inputs, _ = data
+            inputs, labels = data
             inputs = inputs.to(device)
-            model.calculate_lambda(inputs)
-    
+            labels = labels.to(device)
+            outputs = model.calculate_lambda(inputs)
+
+            output_argmax = torch.argmax(outputs, dim=1)
+
+        acc_tensor = torch.zeros_like(labels)
+        acc_tensor[output_argmax==labels] = 1
+        acc += acc_tensor.sum().item()
+
+    acc /= dleng
+    print("ANN Train Acc: {}".format(acc)) # Check the accuracy in Trainset with ANN
     model.channel_wised_normlization()
     print("=> Model Normalize Success")
 
@@ -55,7 +67,7 @@ def spike_test(args, trainset, spikeset, device):
     # print(stdict['block.0.bias'].size())
 
     inp = torch.ones(1, 3, 32, 32)  # To get neauron size, so simulate as a scalemodel
-    model = SpikingVGG16(stdict, block1, block2, classifier, inp, device)
+    model = SpikingVGG16(stdict, block1, block2, classifier, inp, device, Vth=args.Vth, Vres=args.Vres)
     model.to(device)
 
 
@@ -86,7 +98,6 @@ def spike_test(args, trainset, spikeset, device):
             # break
 
         model.FireCount()
-        break
 
         spikecount = torch.sum(outspike, axis=1)
         spikecount_argmax = torch.max(spikecount, dim=1)

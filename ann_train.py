@@ -39,6 +39,9 @@ def main():
     testset = CIFAR10(root='./data', train=False, download=True, transform=transform)
 
     model = Vgg16()
+    for m in model.modules():
+        print(m)
+    raise ValueError
     if torch.cuda.device_count() > 1:
         print("You can use {} GPUs!".format(torch.cuda.device_count()))
         model = nn.DataParallel(model)
@@ -76,6 +79,7 @@ def main():
 
 
 def train(trainset, model, criterion, optimizer, args, device):
+    model.train()
     dlengs = len(trainset)
     trainloader = torch.utils.data.DataLoader(trainset, batch_size=args.batchsize, shuffle=True, num_workers=2)
     
@@ -95,6 +99,7 @@ def train(trainset, model, criterion, optimizer, args, device):
 
 
 def val(testset, model, criterion, args, device):
+    model.eval()
     dlengs = len(testset)
     valloader = torch.utils.data.DataLoader(testset, batch_size=args.batchsize, shuffle=True, num_workers=args.num_workers)
 
