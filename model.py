@@ -356,6 +356,7 @@ class SpikingConv2d(nn.Module):
         return spike
 
 
+# This is Wrong!!
 class SpikingAvgPool2d(nn.Module):
     def __init__(self, kernel_size=2, stride=2, padding=0, ceil_mode=False, count_include_pad=True, divisor_override=None, device=None, Vth=0.5, Vres=0.0) -> None:
         super().__init__()
@@ -412,6 +413,44 @@ class SpikingAvgPool2d(nn.Module):
         return spike
 
 
+class SpikingRandomPool2d(nn.Module):
+    def __init__(self, kernel_size=2, stride=2, padding=0, device=None, Vth=0.5, Vres=0.0) -> None:
+        super().__init__()
+        self.AvgPool2d = nn.AvgPool2d(
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding
+        )
+        self.kernal_size = kernel_size
+        self.stride = stride
+        self.padding = padding
+        self.device = device
+
+    def set_neurons(self, x):
+        n_tmp = self.AvgPool2d(x)
+        return n_tmp
+
+    def get_lambda(self, x):
+        return self.AvgPool2d(x)
+
+    def forward(self, x):
+        # 2, 3 is map index(0 is batch, 1 is channel)
+        ba, ch, h, w = x.size()
+        h_out = int((h + 2*self.padding - self.kernal_size) / 2 + 1)
+        w_out = int((w + 2*self.padding - self.kernal_size) / 2 + 1)
+        x_patch = x.unfold(2, self.kernal_size, self.stride).unfold(3, self.kernal_size, self.stride)
+
+        rand1 = torch.randint(self.kernal_size, (ba, ch, h_out, w_out, self.kernal_size, 1)).to(self.device)
+        rand2 = torch.randint(self.kernal_size, (ba, ch, h_out, w_out, 1, 1)).to(self.device)
+
+        ga1 = torch.gather(x_patch, -1, rand1)
+        ga2 = torch.gather(ga1, -2, rand2)
+
+        outputs = ga2.view(ba, ch, h_out, w_out)
+
+        return outputs
+
+
 class SpikingVGG16(nn.Module):
     def __init__(self, stdict, block1, block2, classifier, set_x, device, Vth=0.5, Vres=0.0, scale=1.0):
         super().__init__()
@@ -425,7 +464,8 @@ class SpikingVGG16(nn.Module):
             block_concat.extend([
                 SpikingConv2d(b[0], b[1], kernel_size=3, padding=1, initW=stdict[b[2]], initB=stdict[b[3]], device=device, Vth=Vth, Vres=Vres, scale=scale),
                 SpikingConv2d(b[1], b[1], kernel_size=3, padding=1, initW=stdict[b[4]], initB=stdict[b[5]], device=device, Vth=Vth, Vres=Vres, scale=scale),
-                nn.AvgPool2d(kernel_size=2, stride=2),
+                SpikingRandomPool2d(kernel_size=2, stride=2, device=device)
+                # nn.AvgPool2d(kernel_size=2, stride=2),
                 # SpikingAvgPool2d(kernel_size=2, stride=2, device=device, Vth=Vth, Vres=Vres)  # Use Avepool2d instead of nn.MaxPool2d(kernel_size=2, stride=2) in SNN
             ])
         for b in self.blockparams2:
@@ -433,7 +473,8 @@ class SpikingVGG16(nn.Module):
                 SpikingConv2d(b[0], b[1], kernel_size=3, padding=1, initW=stdict[b[2]], initB=stdict[b[3]], device=device, Vth=Vth, Vres=Vres, scale=scale),
                 SpikingConv2d(b[1], b[1], kernel_size=3, padding=1, initW=stdict[b[4]], initB=stdict[b[5]], device=device, Vth=Vth, Vres=Vres, scale=scale),
                 SpikingConv2d(b[1], b[1], kernel_size=3, padding=1, initW=stdict[b[6]], initB=stdict[b[7]], device=device, Vth=Vth, Vres=Vres, scale=scale),
-                nn.AvgPool2d(kernel_size=2, stride=2),
+                SpikingRandomPool2d(kernel_size=2, stride=2, device=device)
+                # nn.AvgPool2d(kernel_size=2, stride=2),
                 # SpikingAvgPool2d(kernel_size=2, stride=2, device=device, Vth=Vth, Vres=Vres)  # Use Avepool2d instead of nn.MaxPool2d(kernel_size=2, stride=2) in SNN
             ])
 
@@ -456,8 +497,8 @@ class SpikingVGG16(nn.Module):
         for m in self.modules():
             if isinstance(m, SpikingAvgPool2d):
                 x = getattr(m, mode)(x)
-            elif isinstance(m, nn.AvgPool2d):
-                x = m(x)
+            elif isinstance(m, SpikingRandomPool2d):
+                x = getattr(m, mode)(x)
             elif isinstance(m, SpikingConv2d):
                 x = getattr(m, mode)(x)
             elif isinstance(m, SpikingLinear):
