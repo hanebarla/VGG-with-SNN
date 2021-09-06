@@ -1,4 +1,4 @@
-from os import isatty
+from os import isatty, times
 import numpy as np
 import torch
 import torch.nn as nn
@@ -118,6 +118,35 @@ class Vgg16(nn.Module):
             elif isinstance(m, nn.Linear):
                 nn.init.xavier_normal_(m.weight)
 
+    def layer_debug(self, x, layer_num=1, act_mode="leaky"):
+        activate_fact = {
+            "leaky": nn.LeakyReLU(True),
+            "relu": nn.ReLU(True)
+        }
+        activate = activate_fact[act_mode]
+        before_linear = False
+        layer_cnt = 0
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                x = m(x)
+                x = activate(x)
+                layer_cnt += 1
+            elif isinstance(m, nn.Linear):
+                if not before_linear:
+                    x = x.view(x.size(0), -1)
+                    before_linear = True
+                x = m(x)
+                x = activate(x)
+                layer_cnt += 1
+            elif isinstance(m, nn.AvgPool2d):
+                x = m(x)
+                layer_cnt += 1
+
+            if layer_cnt == layer_num:
+                break
+        
+        return x
+
     def forward(self, x):
         x = self.block(x)
         x = x.view(x.size(0), -1)
@@ -160,8 +189,7 @@ class SpikingLinear(nn.Module):
         self.scale = scale
         self.peak = 1.0
         
-        self.firecout = 0
-        self.firemax = 0
+        self.firecout = None
 
         self.lambda_before = 0.0
         self.lambda_after = 0.0
@@ -196,8 +224,7 @@ class SpikingLinear(nn.Module):
         self.n = torch.zeros(bsize, self.n.size()[1])
         self.n = self.n.to(self.device)
 
-        self.firecout = 0
-        self.firemax = 0
+        self.firecout = torch.zeros_like(self.n).to(self.device)
 
     def get_lambda(self, x):
         lambda_tmp = torch.max(x)
@@ -225,10 +252,7 @@ class SpikingLinear(nn.Module):
         spike[self.n < self.n_Vth] = -self.peak
         spike.to(self.device)
 
-        peak_count = torch.sum(torch.abs(spike)).item()
-        peak_max_count = torch.sum(torch.ones_like(spike)).item()
-        self.firecout += peak_count
-        self.firemax += peak_max_count
+        self.firecout += spike
 
         self.n[self.n > self.Vth] -= self.Vth
         self.n[self.n < self.n_Vth] -= self.n_Vth
@@ -270,8 +294,7 @@ class SpikingConv2d(nn.Module):
         self.scale = scale
         self.peak = 1.0
 
-        self.firecout = 0
-        self.firemax = 0
+        self.firecout = None
 
         self.lambda_before = torch.zeros(N_in_ch).to(device)
         self.lambda_after = torch.zeros(N_out_ch).to(device)
@@ -334,8 +357,7 @@ class SpikingConv2d(nn.Module):
         self.n = torch.zeros(bsize, self.n.size()[1], self.n.size()[2], self.n.size()[3])
         self.n = self.n.to(self.device)
 
-        self.firecout = 0
-        self.firemax = 0
+        self.firecout = torch.zeros_like(self.n).to(self.device)
     
     def forward(self, x):
         self.n += self.conv2d(x)
@@ -345,10 +367,7 @@ class SpikingConv2d(nn.Module):
         spike[self.n < self.n_Vth] = -self.peak
         spike.to(self.device)
 
-        peak_count = torch.sum(torch.abs(spike)).item()
-        peak_max_count = torch.sum(torch.ones_like(spike)).item()
-        self.firecout += peak_count
-        self.firemax += peak_max_count
+        self.firecout += spike
 
         self.n[self.n > self.Vth] -= self.Vth
         self.n[self.n < self.n_Vth] -= self.n_Vth
@@ -376,7 +395,6 @@ class SpikingAvgPool2d(nn.Module):
         self.peak = float(1.0)
 
         self.firecout = 0
-        self.firemax = 0
 
     def set_neurons(self, x):
         n_tmp = self.AvgPool2d(x)
@@ -391,8 +409,7 @@ class SpikingAvgPool2d(nn.Module):
         self.n = torch.zeros(bsize, self.n.size()[1], self.n.size()[2], self.n.size()[3])
         self.n = self.n.to(self.device)
 
-        self.firecout = 0
-        self.firemax = 0
+        self.firecout = torch.zeros_like(self.n).to(self.device)
 
     def forward(self, x):
         self.n += self.AvgPool2d(x)
@@ -402,10 +419,7 @@ class SpikingAvgPool2d(nn.Module):
         spike[self.n < -self.Vth] = -self.peak # avepool2dの負方向のスパイクの閾値はとりあえず-Vthに
         spike.to(self.device)
 
-        peak_count = torch.sum(torch.abs(spike)).item()
-        peak_max_count = torch.sum(torch.ones_like(spike)).item()
-        self.firecout += peak_count
-        self.firemax += peak_max_count
+        self.firecout += spike
 
         self.n[self.n > self.Vth] -= self.Vth
         self.n[self.n < -self.Vth] += self.Vth
@@ -493,13 +507,10 @@ class SpikingVGG16(nn.Module):
         self._set_neurons(set_x) # set membrem voltage
 
     def _manual_forward(self, x, mode="set_neurons"):
+        apply_instance_2d = (SpikingConv2d, SpikingAvgPool2d, SpikingRandomPool2d)
         before_linear = False
         for m in self.modules():
-            if isinstance(m, SpikingAvgPool2d):
-                x = getattr(m, mode)(x)
-            elif isinstance(m, SpikingRandomPool2d):
-                x = getattr(m, mode)(x)
-            elif isinstance(m, SpikingConv2d):
+            if isinstance(m, apply_instance_2d):
                 x = getattr(m, mode)(x)
             elif isinstance(m, SpikingLinear):
                 if not before_linear:
@@ -524,28 +535,43 @@ class SpikingVGG16(nn.Module):
         _ = self._manual_forward(x, mode="set_neurons")
 
     def reset(self, bsize):
+        apply_instance = (SpikingAvgPool2d, SpikingConv2d, SpikingLinear)
         for m in self.modules():
-            if isinstance(m, SpikingConv2d):
-                m.reset_batch_neurons(bsize)
-            elif isinstance(m, SpikingLinear):
-                m.reset_batch_neurons(bsize)
-            elif isinstance(m, SpikingAvgPool2d):
+            if isinstance(m, apply_instance):
                 m.reset_batch_neurons(bsize)
 
-    def FireCount(self):
-        firecnt = 0
-        firemax = 0
+    def layer_debug(self, layer_num=1):
+        fire_map = None
+        layer_cnt = 0
+        apply_instance = (SpikingConv2d, SpikingLinear)
+
         for m in self.modules():
-            if isinstance(m, SpikingAvgPool2d):
-                firecnt += m.firecout
-                firemax += m.firemax
-            elif isinstance(m, SpikingConv2d):
-                firecnt += m.firecout
-                firemax += m.firemax
-            elif isinstance(m, SpikingLinear):
-                firecnt += m.firecout
-                firemax += m.firemax
-        print("Fire Count: {}, Fire Max {}, Fire Rate {}".format(firecnt, firemax, firecnt / firemax))
+            if isinstance(m, SpikingRandomPool2d):
+                layer_cnt += 1
+            elif isinstance(m, apply_instance):
+                fire_map = m.firecout
+                layer_cnt += 1
+
+            if layer_num == layer_cnt:
+                break
+
+        return fire_map
+
+    def FireCount(self, timestep=100):
+        apply_instance = (SpikingAvgPool2d, SpikingConv2d, SpikingLinear)
+        firerate_max = []
+        firerate_min = []
+        firerate_mean = []
+        for m in self.modules():
+            if isinstance(m, apply_instance):
+                firerate_max.append(torch.max(m.firecout/timestep).item())
+                firerate_min.append(torch.min(m.firecout/timestep).item())
+                firerate_mean.append(torch.mean(m.firecout/timestep).item())
+
+        firemax = max(firerate_max)
+        firemin = min(firerate_min)
+        firemean = sum(firerate_mean)/len(firerate_mean)
+        print("Time Step {}, Fire Max Rate: {}, Fire Min Rate: {}, Fire Mean Rate {}".format(timestep, firemax, firemin, firemean))
 
     def forward(self, x):
         x = self.block(x)

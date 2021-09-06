@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 from torchvision.datasets import CIFAR10
 import torchvision.transforms as transforms
-from model import SpikingConv2d, SpikingVGG16
+from model import SpikingConv2d, SpikingVGG16, Vgg16
 from utils import SpikeEncodeDatasets, date2foldername
 
 
@@ -46,12 +46,12 @@ def CW_Normalize(args, model, trainset, device):
     return model
 
 
-def spike_test(args, trainset, spikeset, device):
+def spike_test(args, trainset, testset,  spikeset, device):
     # Load Mmodels
-    if args.load_normalized_weight is None:
+    if args.load_weight is not None:
         stdict = torch.load(args.load_weight, map_location=torch.device('cpu'))['state_dict']
     else:
-        stdict = torch.load(args.load_normalized_weight, map_location=torch.device('cpu'))
+        stdict = None
     # model = SpikingVGG16(stdict)
     block1 = (
         (3, 64, 'block.0.weight', 'block.0.bias', 'block.2.weight', 'block.2.bias'),
@@ -66,23 +66,41 @@ def spike_test(args, trainset, spikeset, device):
     print("=> Load Weight Success")
     # print(stdict['block.0.bias'].size())
 
+    # ANN_model to Debug
+    ANN_model = Vgg16()
+    ANN_model.load_state_dict(stdict)
+    ANN_model.to(device)
+
+    # SNN Initialize
     inp = torch.ones(1, 3, 32, 32)  # To get neauron size, so simulate as a scalemodel
     model = SpikingVGG16(stdict, block1, block2, classifier, inp, device, Vth=args.Vth, Vres=args.Vres)
-    model.to(device)
-
-
     if args.load_normalized_weight is None:
+        model.to(device)
         model = CW_Normalize(args, model, trainset, device)
         torch.save(model.state_dict(), "normalized.pth.tar")
     else:
+        model.load_state_dict(torch.load(args.load_normalized_weight, map_location=torch.device('cpu')))
+        model.to(device)
         print("=> Already Normalized")
 
-
-    spikeloader = torch.utils.data.DataLoader(spikeset, batch_size=args.batchsize)
-
+    # Data load
+    testloader = torch.utils.data.DataLoader(testset, batch_size=args.batchsize, shuffle=False)
+    spikeloader = torch.utils.data.DataLoader(spikeset, batch_size=args.batchsize, shuffle=False)
+    print("{}, {}".format(len(testloader), len(spikeloader)))
     dlen = len(spikeset)
     acc = 0
-    for i, sp in enumerate(spikeloader):
+
+    for i, data in enumerate(zip(testloader, spikeloader)):
+        test_data = data[0]
+        sp = data[1]
+
+        # ANN Test
+        ann_input, ann_label = test_data
+        with torch.no_grad():
+            ann_input = ann_input.to(device)
+            debug_layer = ANN_model.layer_debug(ann_input, layer_num=1)
+            print(debug_layer.size())
+
         outspike = torch.zeros(sp[0].size()[0], args.timelength, 10)
         labels = sp[1]
         model.reset(sp[0].size()[0])  # batch size to argument
@@ -98,13 +116,16 @@ def spike_test(args, trainset, spikeset, device):
             # break
 
         model.FireCount()
+        snn_debug_layer = model.layer_debug(layer_num=1)
+        print(snn_debug_layer.size())
 
         spikecount = torch.sum(outspike, axis=1)
         spikecount_argmax = torch.max(spikecount, dim=1)
         acc_tensor = torch.zeros_like(labels)
         acc_tensor[spikecount_argmax==labels] = 1
-
+        print(acc_tensor.sum().item())
         acc += acc_tensor.sum().item()
+        break
 
     acc /= dlen
     print("Acc: {}".format(acc))
@@ -127,7 +148,7 @@ def main():
     device =  torch.device("cuda" if torch.cuda.is_available() else "cpu") 
     print(device)
 
-    spike_test(args, trainset, Spikes, device)
+    spike_test(args, trainset, testset, Spikes, device)
 
 
 
