@@ -30,9 +30,12 @@ class SpikeEncodeDatasets():
         spikes = torch.zeros(self.timelength, inputs.size()[0], inputs.size()[1], inputs.size()[2])
 
         for i in range(self.timelength):
-            spikes[i,:,:,:] = torch.bernoulli(inputs)
+            p_sp = torch.bernoulli(inputs)
+            m_sp = -1 * torch.bernoulli(1.0 - inputs)
+            spikes[i,:,:,:] = p_sp + m_sp
 
-        spikes[spikes==0] = -1
+
+        # spikes[spikes==0] = -1
 
         return spikes, label
 

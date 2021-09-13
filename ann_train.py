@@ -16,6 +16,7 @@ parser.add_argument('--batchsize', default=128, type=int)
 parser.add_argument('--num_workers', default=8, type=int)
 parser.add_argument('--lr', default=1e-4, type=float)
 parser.add_argument('--decay', default=1e-3, type=float)
+parser.add_argument('--activate', default="leaky")
 parser.add_argument('--savefolder', default="/home/thabara/Documents/VGG-with-SNN/Ann_train_exp")
 
 
@@ -31,20 +32,20 @@ def main():
          transforms.Normalize((0.49139968, 0.48215827 ,0.44653124), (0.24703233, 0.24348505, 0.26158768))]
     )
     """
-    """
+    
     transform = transforms.Compose(
         [transforms.ToTensor(),
          transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]
     )
-    """
-    transform = transforms.ToTensor()
+    
+    # transform = transforms.ToTensor()
     trainset = CIFAR10(root='./data', train=True, download=True, transform=transform)
     testset = CIFAR10(root='./data', train=False, download=True, transform=transform)
 
-    model = Vgg16()
+    model = Vgg16(activate=args.activate)
     # for m in model.modules():
     #     print(m)
-    raise ValueError
+    # raise ValueError
     if torch.cuda.device_count() > 1:
         print("You can use {} GPUs!".format(torch.cuda.device_count()))
         model = nn.DataParallel(model)

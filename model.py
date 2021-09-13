@@ -1,4 +1,5 @@
 from os import isatty, times
+import copy
 import numpy as np
 import torch
 import torch.nn as nn
@@ -72,38 +73,46 @@ class Vgg16(nn.Module):
     """
         Create VGG16 without BatchNormalization, activate is LeakyRelu
         """
-    def __init__(self):
+    def __init__(self, activate="leaky"):
         super().__init__()
         self.num_class = 10
         self.blockparams1 = ((3, 64), (64, 128))
         self.blockparams2 = ((128, 256), (256, 512), (512, 512))
+        
+        
+        activate_factory = {
+            "leaky": nn.LeakyReLU(inplace=True),
+            "relu": nn.ReLU(inplace=True)
+        }
+        activate_func = activate_factory[activate]
+        
 
         block_concat = []
         for b in self.blockparams1:
             block_concat.extend([
                 nn.Conv2d(b[0], b[1], kernel_size=3, padding=1),
-                nn.LeakyReLU(inplace=True),
+                activate_func,
                 nn.Conv2d(b[1], b[1], kernel_size=3, padding=1),
-                nn.LeakyReLU(inplace=True),
+                activate_func,
                 nn.AvgPool2d(kernel_size=2, stride=2)
             ])
         for b in self.blockparams2:
             block_concat.extend([
                 nn.Conv2d(b[0], b[1], kernel_size=3, padding=1),
-                nn.LeakyReLU(inplace=True),
+                activate_func,
                 nn.Conv2d(b[1], b[1], kernel_size=3, padding=1),
-                nn.LeakyReLU(inplace=True),
+                activate_func,
                 nn.Conv2d(b[1], b[1], kernel_size=3, padding=1),
-                nn.LeakyReLU(inplace=True),
+                activate_func,
                 nn.AvgPool2d(kernel_size=2, stride=2)
             ])
 
         self.block = nn.Sequential(*block_concat)
         self.classifier = nn.Sequential(
             nn.Linear(512, 512),
-            nn.LeakyReLU(True),
+            activate_func,
             nn.Linear(512, 32),
-            nn.LeakyReLU(True),
+            activate_func,
             nn.Linear(32, self.num_class),
         )
 
@@ -111,13 +120,16 @@ class Vgg16(nn.Module):
 
     def _initialize_weights(self):
         for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                nn.init.xavier_normal_(m.weight)
-                if m.bias is not None:
-                    nn.init.constant_(m.bias, 0)
-            elif isinstance(m, nn.Linear):
-                nn.init.xavier_normal_(m.weight)
+            if isinstance(m, (nn.Conv2d, nn.Linear)):
+                nn.init.kaiming_normal_(m.weight)
+                
 
+    def forward(self, x):
+        x = self.block(x)
+        x = x.view(x.size(0), -1)
+        x = self.classifier(x)
+        return x
+    
     def layer_debug(self, x, layer_num=1, act_mode="leaky"):
         activate_fact = {
             "leaky": nn.LeakyReLU(True),
@@ -145,13 +157,7 @@ class Vgg16(nn.Module):
             if layer_cnt == layer_num:
                 break
         
-        return x
-
-    def forward(self, x):
-        x = self.block(x)
-        x = x.view(x.size(0), -1)
-        x = self.classifier(x)
-        return x
+        return x  
 
 
 class SpikingLinear(nn.Module):
@@ -242,7 +248,7 @@ class SpikingLinear(nn.Module):
     def maxactivation_normalize(self):
         # In fact, both lambda should multiplicate 0.99, but they are divided by each one.
         self.linear.weight.data = self.scale * self.linear.weight.data / self.lambda_after * self.lambda_before
-        self.linear.bias.data = self.scale * self.linear.bias.data / (self.lambda_after * 0.99)
+        self.linear.bias.data = self.scale * self.linear.bias.data / (self.lambda_after * 0.9)
 
     def forward(self, x):
         self.n += self.linear(x)
@@ -348,7 +354,7 @@ class SpikingConv2d(nn.Module):
         inp_ch = self.lambda_before.size(0)
 
         for i in range(out_ch):
-            self.conv2d.bias.data[i] = self.scale * self.conv2d.bias.data[i] / (self.lambda_after[i] * 0.99)
+            self.conv2d.bias.data[i] = self.scale * self.conv2d.bias.data[i] / (self.lambda_after[i] * 0.9)
             for j in range(inp_ch):
                  # In fact, both lambda should multiplicate 0.99, but they are divided by each one.
                 self.conv2d.weight.data[i, j, :, :] = self.scale * self.conv2d.weight.data[i, j, :, :] / self.lambda_after[i] * self.lambda_before[j]
