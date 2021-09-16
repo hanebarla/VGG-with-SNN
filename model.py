@@ -6,66 +6,95 @@ import torch.nn as nn
 
 
 class Vgg16_BN(nn.Module):
-    def __init__(self):
+    def __init__(self, activate="leaky"):
         """
-        Create VGG16 with BatchNormalization, activate is LeakyRelu
+        Create VGG16 with BatchNormalization, activate is LeakyRelu or ReLU
         """
         super().__init__()
         self.num_class = 10
         self.blockparams1 = ((3, 64), (64, 128))
         self.blockparams2 = ((128, 256), (256, 512), (512, 512))
 
+        activate_factory = {
+            "leaky": nn.LeakyReLU(inplace=True),
+            "relu": nn.ReLU(inplace=True)
+        }
+        activate_func = activate_factory[activate]
+
         block_concat = []
-        """
-        for b in self.blockparams:
-            block_concat.extend([
-                nn.Conv2d(b[0], b[1], kernel_size=3, padding=1),
-                nn.BatchNorm2d(b[1]),
-                nn.LeakyReLU(inplace=True),
-                nn.BatchNorm2d(b[1]),
-                nn.Conv2d(b[1], b[1], kernel_size=3, padding=1),
-                nn.BatchNorm2d(b[1]),
-                nn.LeakyReLU(inplace=True),
-                nn.AvgPool2d(kernel_size=2, stride=2)
-            ])
-        """
         for b in self.blockparams1:
             block_concat.extend([
                 nn.Conv2d(b[0], b[1], kernel_size=3, padding=1),
                 nn.BatchNorm2d(b[1]),
-                nn.LeakyReLU(inplace=True),
+                activate_func,
                 nn.Conv2d(b[1], b[1], kernel_size=3, padding=1),
                 nn.BatchNorm2d(b[1]),
-                nn.LeakyReLU(inplace=True),
+                activate_func,
                 nn.AvgPool2d(kernel_size=2, stride=2)
             ])
         for b in self.blockparams2:
             block_concat.extend([
                 nn.Conv2d(b[0], b[1], kernel_size=3, padding=1),
                 nn.BatchNorm2d(b[1]),
-                nn.LeakyReLU(inplace=True),
+                activate_func,
                 nn.Conv2d(b[1], b[1], kernel_size=3, padding=1),
                 nn.BatchNorm2d(b[1]),
-                nn.LeakyReLU(inplace=True),
+                activate_func,
                 nn.Conv2d(b[1], b[1], kernel_size=3, padding=1),
                 nn.BatchNorm2d(b[1]),
-                nn.LeakyReLU(inplace=True),
+                activate_func,
                 nn.AvgPool2d(kernel_size=2, stride=2)
             ])
 
         self.block = nn.Sequential(*block_concat)
         self.classifier = nn.Sequential(
             nn.Linear(512, 512),
-            nn.LeakyReLU(inplace=True),
+            activate_func,
             nn.Linear(512, 32),
-            nn.LeakyReLU(inplace=True),
+            activate_func,
             nn.Linear(32, self.num_class),
         )
+
+        self._initialize_weights()
+
+    def _initialize_weights(self):
+        for m in self.modules():
+            if isinstance(m, (nn.Conv2d, nn.Linear)):
+                nn.init.kaiming_normal_(m.weight)
 
     def forward(self, x):
         x = self.block(x)
         x = x.view(x.size(0), -1)
         x = self.classifier(x)
+        return x
+
+    def layer_debug(self, x, layer_num=1, act_mode="leaky"):
+        activate_fact = {
+            "leaky": nn.LeakyReLU(True),
+            "relu": nn.ReLU(True)
+        }
+        activate = activate_fact[act_mode]
+        before_linear = False
+        layer_cnt = 0
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                x = m(x)
+                x = activate(x)
+                layer_cnt += 1
+            elif isinstance(m, nn.Linear):
+                if not before_linear:
+                    x = x.view(x.size(0), -1)
+                    before_linear = True
+                x = m(x)
+                x = activate(x)
+                layer_cnt += 1
+            elif isinstance(m, nn.AvgPool2d):
+                x = m(x)
+                layer_cnt += 1
+
+            if layer_cnt == layer_num:
+                break
+        
         return x
 
 
@@ -79,13 +108,11 @@ class Vgg16(nn.Module):
         self.blockparams1 = ((3, 64), (64, 128))
         self.blockparams2 = ((128, 256), (256, 512), (512, 512))
         
-        
         activate_factory = {
             "leaky": nn.LeakyReLU(inplace=True),
             "relu": nn.ReLU(inplace=True)
         }
         activate_func = activate_factory[activate]
-        
 
         block_concat = []
         for b in self.blockparams1:
@@ -157,7 +184,7 @@ class Vgg16(nn.Module):
             if layer_cnt == layer_num:
                 break
         
-        return x  
+        return x
 
 
 class SpikingLinear(nn.Module):

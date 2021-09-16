@@ -40,6 +40,13 @@ class SpikeEncodeDatasets():
         return spikes, label
 
 
+def printSave(message, filename):
+    with open(filename, mode='a') as f:
+        f.write(message + "\n")
+
+    print(message)
+
+
 if __name__ == "__main__":
     transform = transforms.ToTensor()
     testset = CIFAR10(root='./data', train=False, download=True, transform=transform)
