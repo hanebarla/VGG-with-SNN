@@ -27,8 +27,8 @@ parser.add_argument('--savefolder', default="/home/thabara/Documents/VGG-with-SN
 def main():
     args = parser.parse_args()
     savefolder = os.path.join(args.savefolder,
-                              "optim-{}_lr-{}_activate-{}_bn-{}_DA-{}".format(args.optim, args.lr, args.activate, args.bn, args.DA),
-                              date2foldername())
+                              "optim-{}_lr-{}_decay-{}_split-{}_activate-{}_bn-{}_DA-{}".format(args.optim, args.lr, args.decay, args.split_train_num, args.activate, args.bn, args.DA)
+                              )
     os.makedirs(savefolder, exist_ok=True)
     logfile = os.path.join(savefolder, "log.txt")
 
