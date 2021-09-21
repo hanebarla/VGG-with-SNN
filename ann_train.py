@@ -43,7 +43,24 @@ def main():
     )
     """
 
-    transform = transforms.Compose(
+    if args.DA:
+        train_transform = transforms.Compose(
+            [
+                transforms.RandomHorizontalFlip(),
+                transforms.RandomCrop((28, 28)),
+                transforms.Pad((2, 2, 2, 2), padding_mode="edge"),
+                transforms.ToTensor(),
+                transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+            ]
+        )
+    else:
+        train_transform = transforms.Compose(
+            [
+                transforms.ToTensor(),
+                transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+            ]
+        )
+    test_transform = transforms.Compose(
         [
             transforms.ToTensor(),
             transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
@@ -51,25 +68,8 @@ def main():
     )
     
     # transform = transforms.ToTensor()
-    original_trainset = CIFAR10(root='./data', train=True, download=True, transform=transform)
-    testset = CIFAR10(root='./data', train=False, download=True, transform=transform)
-
-    if args.DA:
-        SDA_transform = transforms.Compose(
-            [
-                transforms.RandomHorizontalFlip(p=1.0),
-                transforms.RandomCrop((28, 28)),
-                transforms.Pad((2, 2, 2, 2), padding_mode="edge"),
-                transforms.ToTensor(),
-                transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
-            ]
-        )
-        SDA_trainset = CIFAR10(root='./data', train=True, download=True, transform=SDA_transform)
-        original_trainset = torch.utils.data.ConcatDataset([original_trainset, SDA_trainset])
-    
-    n_train = int(len(original_trainset)*args.split_train_num)
-    n_val = len(original_trainset) - n_train
-    trainset, valset = torch.utils.data.random_split(original_trainset, [n_train, n_val])
+    trainset = CIFAR10(root='./data', train=True, download=True, transform=train_transform)
+    testset = CIFAR10(root='./data', train=False, download=True, transform=test_transform)
 
     if args.bn == 1:
         model = Vgg16_BN(activate=args.activate)
@@ -97,7 +97,7 @@ def main():
 
         train(trainset, model, criterion, optimizer, args, device, logfile)
 
-        pred = val(valset, model, criterion, args, device, logfile)
+        pred = val(testset, model, criterion, args, device, logfile)
 
         is_best = pred > best_pred
         best_pred = max(pred, best_pred)
