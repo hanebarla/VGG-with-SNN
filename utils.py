@@ -1,3 +1,4 @@
+import csv
 import shutil
 import datetime
 import torch
@@ -45,6 +46,23 @@ def printSave(message, filename):
         f.write(message + "\n")
 
     print(message)
+
+
+def saveCSVrow(row, filename):
+    with open(filename, "a") as f:
+        writer = csv.writer(f)
+        writer.writerow(row)
+
+
+def saveCSVrows(rows, filename):
+    with open(filename, "a") as f:
+        writer = csv.writer(f)
+        writer.writerows(rows)
+
+
+def printConfigs(args, filename):
+    with open(filename, "w") as f:
+        f.write(vars(args))
 
 
 if __name__ == "__main__":

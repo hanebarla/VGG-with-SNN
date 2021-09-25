@@ -1,6 +1,5 @@
 import argparse
 import os
-from typing import ChainMap
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
@@ -8,7 +7,7 @@ import torch.nn as nn
 from torchvision.datasets import CIFAR10
 import torchvision.transforms as transforms
 from model import SpikingConv2d, SpikingVGG16, Vgg16
-from utils import SpikeEncodeDatasets, date2foldername
+from utils import SpikeEncodeDatasets, date2foldername, saveCSVrow, saveCSVrows
 
 
 parser = argparse.ArgumentParser(description='PyTorch CANNet2s')
@@ -96,6 +95,9 @@ def LayerViewer(layer_num, ann_layer, snn_layer, batch=0):
 
 
 def spike_test(args, trainset, testset,  spikeset, device):
+    savecsv = os.path.join(args.savefolder, "Vth-{}_result_per_image.csv".format(args.Vth))
+    saveCSVrow(["Vth","index","spike_argmax","label","acc"], savecsv)
+
     # Load Mmodels
     if args.load_weight is not None:
         stdict = torch.load(args.load_weight, map_location=torch.device('cpu'))['state_dict']
@@ -126,7 +128,8 @@ def spike_test(args, trainset, testset,  spikeset, device):
     if args.load_normalized_weight is None:
         model.to(device)
         model = CW_Normalize(args, model, trainset, device)
-        torch.save(model.state_dict(), "normalized.pth.tar")
+        NormalizeSaveName = os.path.join(os.path.dirname(args.load_weight), "normalized.pth.tar")
+        torch.save(model.state_dict(), NormalizeSaveName)
     else:
         model.load_state_dict(torch.load(args.load_normalized_weight, map_location=torch.device('cpu')))
         model.to(device)
@@ -158,12 +161,12 @@ def spike_test(args, trainset, testset,  spikeset, device):
         print("{} start. Voltage reseted".format(i))
 
         # time step proccess
-        for i in range(args.timelength):
-            spike = sp[0][:, i, :, :, :]
+        for j in range(args.timelength):
+            spike = sp[0][:, j, :, :, :]
             spike = spike.to(device)
             with torch.no_grad():
                 out = model(spike)
-            outspike[:, i, :] = out
+            outspike[:, j, :] = out
             # break
 
         model.FireCount(timestep=args.timelength)
@@ -179,6 +182,16 @@ def spike_test(args, trainset, testset,  spikeset, device):
         acc_tensor = torch.zeros_like(labels)
         acc_tensor[spikecount_argmax==labels] = 1
 
+        # Save accurate per image
+        bsize = spikecount_argmax.size(0)
+        vth_list = torch.full((bsize, 1), args.Vth)
+        indecies = torch.arange(bsize).reshape(-1, 1) + (args.batchsize * i)
+        spikecount_argmax_info = spikecount_argmax.view(-1, 1)
+        labels_info = labels.view(-1, 1)
+        acc_tensor_info = acc_tensor.view(-1, 1)
+        saveinfo = np.concatenate([vth_list, indecies, spikecount_argmax_info, labels_info, acc_tensor_info], -1)
+        saveCSVrows(saveinfo.tolist(), savecsv)
+
         acc += acc_tensor.sum().item()
 
     acc /= dlen
@@ -187,9 +200,10 @@ def spike_test(args, trainset, testset,  spikeset, device):
 
 
 def main():
+    VthCond = [(i+5)/10 for i in range(11)]
     args = parser.parse_args()
     args.savefolder = os.path.join(args.savefolder, date2foldername())
-    print(args.savefolder)
+    os.makedirs(args.savefolder, exist_ok=True)
 
     traintransform = transforms.Compose(
         [transforms.ToTensor(),
@@ -203,7 +217,10 @@ def main():
     device =  torch.device("cuda" if torch.cuda.is_available() else "cpu") 
     print(device)
 
-    spike_test(args, trainset, testset, Spikes, device)
+    for vth in VthCond:
+        print("========== Vth: {} ==========".format(vth))
+        args.Vth = vth
+        spike_test(args, trainset, testset, Spikes, device)
 
 
 
