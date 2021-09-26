@@ -10,7 +10,7 @@ from model import SpikingConv2d, SpikingVGG16, Vgg16
 from utils import SpikeEncodeDatasets, date2foldername, saveCSVrow, saveCSVrows
 
 
-parser = argparse.ArgumentParser(description='PyTorch CANNet2s')
+parser = argparse.ArgumentParser(description='PyTorch Spiking Test')
 parser.add_argument('--batchsize', default=128, type=int)
 parser.add_argument('--scale', default=1.0, type=float)
 parser.add_argument('--Vth', default=1.0, type=float)
