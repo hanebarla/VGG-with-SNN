@@ -11,13 +11,13 @@ from utils import date2foldername, printSave, save_checkpoint
 
 
 parser = argparse.ArgumentParser(description='PyTorch SNN')
-parser.add_argument('--epochs', default=200, type=int)
+parser.add_argument('--epochs', default=300, type=int)
 parser.add_argument('--batchsize', default=128, type=int)
 parser.add_argument('--num_workers', default=8, type=int)
 parser.add_argument('--optim', default="adam", choices=["sgd", "adam", "amsgrad"])
 parser.add_argument('--lr', default=1e-4, type=float)
 parser.add_argument('--decay', default=1e-3, type=float)
-parser.add_argument('--split_train_num', default=0.8, type=float)
+# parser.add_argument('--split_train_num', default=0.8, type=float)
 parser.add_argument('--activate', default="leaky", choices=["leaky", "relu"])
 parser.add_argument('--bn', default=0, type=int)
 parser.add_argument('--DA', default=0, type=int)
@@ -27,10 +27,11 @@ parser.add_argument('--savefolder', default="/home/thabara/Documents/VGG-with-SN
 def main():
     args = parser.parse_args()
     savefolder = os.path.join(args.savefolder,
-                              "optim-{}_lr-{}_decay-{}_split-{}_activate-{}_bn-{}_DA-{}".format(args.optim, args.lr, args.decay, args.split_train_num, args.activate, args.bn, args.DA)
+                              "optim-{}_lr-{}_decay-{}_activate-{}_bn-{}_DA-{}".format(args.optim, args.lr, args.decay, args.activate, args.bn, args.DA),
+                              date2foldername()
                               )
     os.makedirs(savefolder, exist_ok=True)
-    logfile = os.path.join(savefolder, "log.txt")
+    logfile = os.path.join(savefolder,"log.txt")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     torch.backends.cudnn.benchmark = True
