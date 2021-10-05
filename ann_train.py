@@ -5,16 +5,17 @@ import torchvision.transforms as transforms
 from torchvision.datasets import CIFAR10
 import torch
 import torch.nn as nn
-import torch.optim as optim
+import torch.optim as default_optim
+import torch_optimizer as optim
 from model import Vgg16_BN, Vgg16
 from utils import date2foldername, printSave, save_checkpoint
 
 
 parser = argparse.ArgumentParser(description='PyTorch SNN')
-parser.add_argument('--epochs', default=300, type=int)
+parser.add_argument('--epochs', default=200, type=int)
 parser.add_argument('--batchsize', default=128, type=int)
 parser.add_argument('--num_workers', default=8, type=int)
-parser.add_argument('--optim', default="adam", choices=["sgd", "adam", "amsgrad"])
+parser.add_argument('--optim', default="adam", choices=["sgd", "adam", "amsgrad", "radam"])
 parser.add_argument('--lr', default=1e-4, type=float)
 parser.add_argument('--decay', default=1e-3, type=float)
 # parser.add_argument('--split_train_num', default=0.8, type=float)
@@ -87,9 +88,10 @@ def main():
     criterion = nn.CrossEntropyLoss()
 
     optim_fact = {
-        "sgd": optim.SGD(model.parameters(), args.lr, weight_decay=args.decay),
-        "adam": optim.Adam(model.parameters(), args.lr, weight_decay=args.decay),
-        "amsgrad": optim.Adam(model.parameters(), args.lr, weight_decay=args.decay, amsgrad=True)
+        "sgd": default_optim.SGD(model.parameters(), args.lr, weight_decay=args.decay),
+        "adam": default_optim.Adam(model.parameters(), args.lr, weight_decay=args.decay),
+        "amsgrad": default_optim.Adam(model.parameters(), args.lr, weight_decay=args.decay, amsgrad=True),
+        "radam": optim.RAdam(model.parameters(), args.lr, weight_decay=args.decay)
     }
     optimizer = optim_fact[args.optim]
 

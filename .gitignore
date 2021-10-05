@@ -11,3 +11,5 @@ ann_train.sh
 /0912
 /Layer_Debug
 nohup.out
+progress.txt
+/model
