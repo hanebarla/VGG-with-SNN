@@ -216,6 +216,7 @@ class SpikingLinear(nn.Module):
 
         self.n = None
         self.Amax = None
+        self.alpha = alpha
         self.Vth = Vth
         self.Vres = Vres
         self.n_Vth = - Vth / alpha
@@ -316,11 +317,12 @@ class SpikingConv2d(nn.Module):
     alpha : float
         slope of LeakyRelu in negative area
     """
-    def __init__(self, N_in_ch, N_out_ch, kernel_size=3, padding=1, initW=None, initB=None, device=None, Vth=0.5, Vres=0.0, alpha=0.01, scale=1.0, out_h=1, out_w=1):
+    def __init__(self, N_in_ch, N_out_ch, kernel_size=3, padding=1, initW=None, initB=None, device=None, Vth=0.5, Vres=0.0, alpha=0.01, scale=1.0, out_h=1, out_w=1, bn=None):
         super().__init__()
         self.device = device
 
         self.n = None
+        self.alpha = alpha
         self.Vth = Vth
         self.Vres = Vres
         self.n_Vth = - Vth / alpha
@@ -339,17 +341,30 @@ class SpikingConv2d(nn.Module):
 
         self.conv2d = nn.Conv2d(N_in_ch, N_out_ch, kernel_size=kernel_size, padding=padding)
         self.conv2d.bias = nn.Parameter(torch.zeros(N_out_ch))
+
+        gamma, beta, mean, var, _ = bn
+        sigma = torch.sqrt(var + 1e-7)
+        gamma_sigma = gamma / sigma
         if initW is not None:
+            if bn is not None:
+                initW = initW.permute(1, 2, 3, 0)
+                initW = initW * gamma_sigma
+                initW = initW.permute(3, 0, 1, 2)
+
             self.conv2d.weight = nn.Parameter(initW)
         else:
             self.conv2d.weight = nn.Parameter(torch.zeros((N_out_ch, N_in_ch, kernel_size, kernel_size)))
 
         if initB is not None:
+            if bn is not None:
+                initB = gamma_sigma * (initB - mean) + beta
+
             self.conv2d.bias = nn.Parameter(initB)
         else:
             self.conv2d.bias = nn.Parameter(
                 torch.zeros(N_out_ch, out_h, out_w)
             )
+
 
     def set_neurons(self, x):
         n_tmp = self.conv2d(x)
@@ -499,7 +514,7 @@ class SpikingRandomPool2d(nn.Module):
 
 
 class SpikingVGG16(nn.Module):
-    def __init__(self, stdict, block1, block2, classifier, set_x, device, Vth=0.5, Vres=0.0, scale=1.0):
+    def __init__(self, stdict, block1, block2, bn1, bn2, classifier, set_x, device, Vth=0.5, Vres=0.0, scale=1.0):
         super().__init__()
         self.num_class = 10
         self.blockparams1 = block1
@@ -507,19 +522,26 @@ class SpikingVGG16(nn.Module):
         self.classifier = classifier
 
         block_concat = []
-        for b in self.blockparams1:
+        for b, bnk in zip(self.blockparams1, bn1):
+            bns = []
+            for bn_keys in bnk:
+                bns.append([stdict[k] for k in bn_keys])
             block_concat.extend([
-                SpikingConv2d(b[0], b[1], kernel_size=3, padding=1, initW=stdict[b[2]], initB=stdict[b[3]], device=device, Vth=Vth, Vres=Vres, scale=scale),
-                SpikingConv2d(b[1], b[1], kernel_size=3, padding=1, initW=stdict[b[4]], initB=stdict[b[5]], device=device, Vth=Vth, Vres=Vres, scale=scale),
+                SpikingConv2d(b[0], b[1], kernel_size=3, padding=1, initW=stdict[b[2]], initB=stdict[b[3]], device=device, Vth=Vth, Vres=Vres, scale=scale, bn=bns[0]),
+                SpikingConv2d(b[1], b[1], kernel_size=3, padding=1, initW=stdict[b[4]], initB=stdict[b[5]], device=device, Vth=Vth, Vres=Vres, scale=scale, bn=bns[1]),
                 SpikingRandomPool2d(kernel_size=2, stride=2, device=device)
                 # nn.AvgPool2d(kernel_size=2, stride=2),
                 # SpikingAvgPool2d(kernel_size=2, stride=2, device=device, Vth=Vth, Vres=Vres)  # Use Avepool2d instead of nn.MaxPool2d(kernel_size=2, stride=2) in SNN
             ])
-        for b in self.blockparams2:
+        for b, bnk in zip(self.blockparams2, bn2):
+            bns = []
+            for bn_keys in bnk:
+                bns.append([stdict[k] for k in bn_keys])
+
             block_concat.extend([
-                SpikingConv2d(b[0], b[1], kernel_size=3, padding=1, initW=stdict[b[2]], initB=stdict[b[3]], device=device, Vth=Vth, Vres=Vres, scale=scale),
-                SpikingConv2d(b[1], b[1], kernel_size=3, padding=1, initW=stdict[b[4]], initB=stdict[b[5]], device=device, Vth=Vth, Vres=Vres, scale=scale),
-                SpikingConv2d(b[1], b[1], kernel_size=3, padding=1, initW=stdict[b[6]], initB=stdict[b[7]], device=device, Vth=Vth, Vres=Vres, scale=scale),
+                SpikingConv2d(b[0], b[1], kernel_size=3, padding=1, initW=stdict[b[2]], initB=stdict[b[3]], device=device, Vth=Vth, Vres=Vres, scale=scale, bn=bns[0]),
+                SpikingConv2d(b[1], b[1], kernel_size=3, padding=1, initW=stdict[b[4]], initB=stdict[b[5]], device=device, Vth=Vth, Vres=Vres, scale=scale, bn=bns[1]),
+                SpikingConv2d(b[1], b[1], kernel_size=3, padding=1, initW=stdict[b[6]], initB=stdict[b[7]], device=device, Vth=Vth, Vres=Vres, scale=scale, bn=bns[2]),
                 SpikingRandomPool2d(kernel_size=2, stride=2, device=device)
                 # nn.AvgPool2d(kernel_size=2, stride=2),
                 # SpikingAvgPool2d(kernel_size=2, stride=2, device=device, Vth=Vth, Vres=Vres)  # Use Avepool2d instead of nn.MaxPool2d(kernel_size=2, stride=2) in SNN
@@ -612,6 +634,13 @@ class SpikingVGG16(nn.Module):
         output = self.classifier_concat(x)
 
         return output
+
+    def changeVth(self, Vth):
+        apply_instance = (SpikingConv2d, SpikingLinear)
+        for m in self.modules():
+            if isinstance(m, apply_instance):
+                m.Vth = Vth
+                m.n_Vth = -Vth / m.alpha
 
 
 if __name__ == "__main__":
