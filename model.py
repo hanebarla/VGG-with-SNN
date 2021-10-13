@@ -79,6 +79,7 @@ class Vgg16_BN(nn.Module):
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
                 x = m(x)
+                x = self.block[layer_cnt+1](x) # batch norm layer
                 x = activate(x)
                 layer_cnt += 1
             elif isinstance(m, nn.Linear):
@@ -225,8 +226,8 @@ class SpikingLinear(nn.Module):
         
         self.firecout = None
 
-        self.lambda_before = 0.0
-        self.lambda_after = 0.0
+        self.lambda_before = []
+        self.lambda_after = []
 
         if alpha == 0:
             self.activate = nn.ReLU()
@@ -260,23 +261,39 @@ class SpikingLinear(nn.Module):
 
         self.firecout = torch.zeros_like(self.n).to(self.device)
 
+    def ann_forward(self, x):
+        return self.linear(x)
+
     def get_lambda(self, x):
+        x_tmp = x.detach()
+        x_tmp = torch.quantile(x_tmp, 0.9999, dim=1)
+        self.lambda_before.append(x_tmp)
+        """
         lambda_tmp = torch.max(x)
         if lambda_tmp > self.lambda_before:
             self.lambda_before = lambda_tmp
+        """
 
         n_tmp = self.linear(x)
         n_tmp = self.activate(n_tmp)
+        n_tmp_detach = n_tmp.detach()
+        n_tmp_detach = torch.quantile(n_tmp_detach, 0.9999, dim=1)
+        self.lambda_after.append(n_tmp_detach)
+        """
         lambda_tmp = torch.max(n_tmp)
         if lambda_tmp > self.lambda_after:
             self.lambda_after = lambda_tmp
+        """
 
         return n_tmp
 
     def maxactivation_normalize(self):
-        # In fact, both lambda should multiplicate 0.99, but they are divided by each one.
-        self.linear.weight.data = self.scale * self.linear.weight.data / self.lambda_after * self.lambda_before
-        self.linear.bias.data = self.scale * self.linear.bias.data / (self.lambda_after * 0.9)
+        self.lambda_before = torch.cat(self.lambda_before, 0)
+        self.lambda_after = torch.cat(self.lambda_after, 0)
+        self.lambda_before = torch.quantile(self.lambda_before, 0.5)
+        self.lambda_after = torch.quantile(self.lambda_after, 0.5)
+        self.linear.weight.data = self.scale * (self.linear.weight.data / abs(self.lambda_after)) * abs(self.lambda_before)
+        self.linear.bias.data = self.scale * (self.linear.bias.data / abs(self.lambda_after))
 
     def forward(self, x):
         self.n += self.linear(x)
@@ -331,8 +348,8 @@ class SpikingConv2d(nn.Module):
 
         self.firecout = None
 
-        self.lambda_before = torch.zeros(N_in_ch).to(device)
-        self.lambda_after = torch.zeros(N_out_ch).to(device)
+        self.lambda_before = []
+        self.lambda_after = []
 
         if alpha == 0:
             self.activate = nn.ReLU()
@@ -342,9 +359,11 @@ class SpikingConv2d(nn.Module):
         self.conv2d = nn.Conv2d(N_in_ch, N_out_ch, kernel_size=kernel_size, padding=padding)
         self.conv2d.bias = nn.Parameter(torch.zeros(N_out_ch))
 
-        gamma, beta, mean, var, _ = bn
-        sigma = torch.sqrt(var + 1e-7)
-        gamma_sigma = gamma / sigma
+        if bn is not None:
+            gamma, beta, mean, var, _ = bn
+            sigma = torch.sqrt(var + 1e-5)
+            gamma_sigma = gamma / sigma
+
         if initW is not None:
             if bn is not None:
                 initW = initW.permute(1, 2, 3, 0)
@@ -372,40 +391,58 @@ class SpikingConv2d(nn.Module):
 
         return self.n
 
-    def get_lambda(self, x):
-        """
-        Calculate each channel's max
-        """
-        x_tmp = torch.clone(x)
-        x_tmp = x_tmp.view(x_tmp.size(0), x_tmp.size(1), -1)
-        x_batch_ch_max, _ = torch.max(x_tmp, 2)
-        x_ch_max, _  = torch.max(x_batch_ch_max, 0)
-        self.lambda_before = torch.where(self.lambda_before < x_ch_max, x_ch_max, self.lambda_before)
-
-        n_tmp = self.conv2d(x)
-        n_tmp = self.activate(n_tmp)
-        n_tmp_reshaped = n_tmp.view(n_tmp.size(0), n_tmp.size(1), -1) # size: (batch_size, channel_size, w*h)
-        batch_ch_max, _ = torch.max(n_tmp_reshaped, 2) # size: (batch_size, channel_size)
-        ch_max, _ = torch.max(batch_ch_max, 0) # size(channel_size)
-        self.lambda_after = torch.where(self.lambda_after < ch_max, ch_max, self.lambda_after)
-
-        return n_tmp
-
-    def channel_wise_normalize(self):
-        out_ch = self.lambda_after.size(0)
-        inp_ch = self.lambda_before.size(0)
-
-        for i in range(out_ch):
-            self.conv2d.bias.data[i] = self.scale * self.conv2d.bias.data[i] / (self.lambda_after[i] * 0.9)
-            for j in range(inp_ch):
-                 # In fact, both lambda should multiplicate 0.99, but they are divided by each one.
-                self.conv2d.weight.data[i, j, :, :] = self.scale * self.conv2d.weight.data[i, j, :, :] / self.lambda_after[i] * self.lambda_before[j]
-
     def reset_batch_neurons(self, bsize):
         self.n = torch.zeros(bsize, self.n.size()[1], self.n.size()[2], self.n.size()[3])
         self.n = self.n.to(self.device)
 
         self.firecout = torch.zeros_like(self.n).to(self.device)
+
+    def ann_forward(self, x):
+        return self.conv2d(x)
+
+    def get_lambda(self, x):
+        """
+        Calculate each channel's max
+        """
+        x_tmp = x.detach()
+        x_tmp = x_tmp.view(x_tmp.size(0), x_tmp.size(1), -1)
+        x_tmp = x_tmp.permute(0, 2, 1)
+        x_tmp = torch.quantile(x_tmp, 0.9999, dim=1)
+        # x_tmp = x_tmp.contiguous().view(-1, x_tmp.size(1))
+        self.lambda_before.append(x_tmp.detach())
+        """
+        x_batch_ch_max, _ = torch.max(x_tmp, 2)
+        x_ch_max, _  = torch.max(x_batch_ch_max, 0)
+        self.lambda_before = torch.where(self.lambda_before < x_ch_max, x_ch_max, self.lambda_before)
+        """
+
+        n_tmp = self.conv2d(x)
+        n_tmp = self.activate(n_tmp)
+        n_tmp_reshaped = n_tmp.view(n_tmp.size(0), n_tmp.size(1), -1) # size: (batch_size, channel_size, w*h)
+        n_tmp_reshaped = n_tmp_reshaped.permute(0, 2, 1) # size: (batch_size, w*h, channel_size)
+        n_tmp_reshaped = torch.quantile(n_tmp_reshaped, 0.9999, dim=1) # size: (batch_size, channel_size)
+        # n_tmp_reshaped = n_tmp_reshaped.contiguous().view(-1, n_tmp_reshaped.size(1))
+        self.lambda_after.append(n_tmp_reshaped.detach())
+        """
+        batch_ch_max, _ = torch.max(n_tmp_reshaped, 2) # size: (batch_size, channel_size)
+        ch_max, _ = torch.max(batch_ch_max, 0) # size(channel_size)
+        self.lambda_after = torch.where(self.lambda_after < ch_max, ch_max, self.lambda_after)
+        """
+
+        return n_tmp
+
+    def channel_wise_normalize(self):
+        self.lambda_before = torch.cat(self.lambda_before, 0)
+        self.lambda_after = torch.cat(self.lambda_after, 0)
+        out_ch = self.lambda_after.size(1)
+        inp_ch = self.lambda_before.size(1)
+        self.lambda_before = torch.quantile(self.lambda_before, 0.5, dim=0)
+        self.lambda_after = torch.quantile(self.lambda_after, 0.5, dim=0)
+
+        for i in range(out_ch):
+            self.conv2d.bias.data[i] = self.scale * (self.conv2d.bias.data[i] / abs(self.lambda_after[i]))
+            for j in range(inp_ch):
+                self.conv2d.weight.data[i, j, :, :] = self.scale * (self.conv2d.weight.data[i, j, :, :] / abs(self.lambda_after[i])) * abs(self.lambda_before[j])
     
     def forward(self, x):
         self.n += self.conv2d(x)
@@ -453,6 +490,9 @@ class SpikingAvgPool2d(nn.Module):
     def get_lambda(self, x):
         return self.AvgPool2d(x)
 
+    def ann_forward(self, x):
+        return self.AvgPool2d(x)
+
     def reset_batch_neurons(self, bsize):
         self.n = torch.zeros(bsize, self.n.size()[1], self.n.size()[2], self.n.size()[3])
         self.n = self.n.to(self.device)
@@ -495,6 +535,9 @@ class SpikingRandomPool2d(nn.Module):
     def get_lambda(self, x):
         return self.AvgPool2d(x)
 
+    def ann_forward(self, x):
+        return self.AvgPool2d(x)
+
     def forward(self, x):
         # 2, 3 is map index(0 is batch, 1 is channel)
         ba, ch, h, w = x.size()
@@ -525,7 +568,10 @@ class SpikingVGG16(nn.Module):
         for b, bnk in zip(self.blockparams1, bn1):
             bns = []
             for bn_keys in bnk:
-                bns.append([stdict[k] for k in bn_keys])
+                if bn_keys is not None:
+                    bns.append([stdict[k] for k in bn_keys])
+                else:
+                    bns.append(None)
             block_concat.extend([
                 SpikingConv2d(b[0], b[1], kernel_size=3, padding=1, initW=stdict[b[2]], initB=stdict[b[3]], device=device, Vth=Vth, Vres=Vres, scale=scale, bn=bns[0]),
                 SpikingConv2d(b[1], b[1], kernel_size=3, padding=1, initW=stdict[b[4]], initB=stdict[b[5]], device=device, Vth=Vth, Vres=Vres, scale=scale, bn=bns[1]),
@@ -536,7 +582,10 @@ class SpikingVGG16(nn.Module):
         for b, bnk in zip(self.blockparams2, bn2):
             bns = []
             for bn_keys in bnk:
-                bns.append([stdict[k] for k in bn_keys])
+                if bn_keys is not None:
+                    bns.append([stdict[k] for k in bn_keys])
+                else:
+                    bns.append(None)
 
             block_concat.extend([
                 SpikingConv2d(b[0], b[1], kernel_size=3, padding=1, initW=stdict[b[2]], initB=stdict[b[3]], device=device, Vth=Vth, Vres=Vres, scale=scale, bn=bns[0]),
@@ -573,6 +622,27 @@ class SpikingVGG16(nn.Module):
                     before_linear = True
                 x = getattr(m, mode)(x)
 
+        return x
+
+    def ann_forward(self, x, activate):
+        activate_factory = {
+            "leaky": nn.LeakyReLU(inplace=True),
+            "relu": nn.ReLU(inplace=True)
+        }
+        activate_func = activate_factory[activate]
+        before_linear = False
+        for m in self.modules():
+            if isinstance(m, SpikingConv2d):
+                x = m.ann_forward(x)
+                x = activate_func(x)
+            elif isinstance(m, SpikingRandomPool2d):
+                x = m.ann_forward(x)
+            elif isinstance(m, SpikingLinear):
+                if not before_linear:
+                    x = x.view(x.size(0), -1)
+                    before_linear = True
+                x = m.ann_forward(x)
+                x = activate_func(x)
         return x
 
     def calculate_lambda(self, x):

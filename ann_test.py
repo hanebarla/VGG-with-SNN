@@ -13,10 +13,12 @@ from utils import save_checkpoint
 parser = argparse.ArgumentParser(description='PyTorch SNN')
 parser.add_argument('--batchsize', default=128, type=int)
 parser.add_argument('--num_workers', default=2, type=int)
+parser.add_argument('--bn', default=0, type=int)
 parser.add_argument('--load_weight', default="0822/model_best.pth.tar")
 
 
 def test(testset, model, criterion, args, device):
+    model.eval()
     dlengs = len(testset)
     valloader = torch.utils.data.DataLoader(testset, batch_size=args.batchsize, shuffle=True, num_workers=args.num_workers)
 
@@ -58,7 +60,11 @@ def main():
     )
     testset = CIFAR10(root='./data', train=False, download=True, transform=transform)
 
-    model = Vgg16()
+    if args.bn == 1:
+        model = Vgg16_BN()
+    else:
+        model = Vgg16()
+    print(model.block[0])
     model.load_state_dict(torch.load(args.load_weight)["state_dict"])
     if torch.cuda.device_count() > 1:
         print("You can use {} GPUs!".format(torch.cuda.device_count()))

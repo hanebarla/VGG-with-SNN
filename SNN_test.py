@@ -96,8 +96,14 @@ def LayerViewer(layer_num, ann_layer, snn_layer, batch=0):
 
 
 def spike_test(args, trainset, testset,  spikeset, device):
-    savecsv = os.path.join(args.savefolder, "Vth-{}_result_per_image.csv".format(args.Vth))
-    saveCSVrow(["Vth","index","spike_argmax","label","acc"], savecsv)
+    # savecsv = os.path.join(args.savefolder, "Vth-{}_result_per_image.csv".format(args.Vth))
+    # saveCSVrow(["Vth","index","spike_argmax","label","acc"], savecsv)
+
+    # Data load
+    testloader = torch.utils.data.DataLoader(testset, batch_size=args.batchsize, shuffle=False)
+    spikeloader = torch.utils.data.DataLoader(spikeset, batch_size=args.batchsize, shuffle=False)
+    print("Data nums: ANN-{}, SNN-{}".format(len(testloader), len(spikeloader)))
+    dlen = len(spikeset)
 
     # Load Mmodels
     if args.load_weight is not None:
@@ -167,6 +173,7 @@ def spike_test(args, trainset, testset,  spikeset, device):
         ),
     )
 
+
     classifier = ('classifier.0.weight', 'classifier.0.bias', 'classifier.2.weight', 'classifier.2.bias', 'classifier.4.weight', 'classifier.4.bias')
     print("=> Load Weight Success")
     # print(stdict['block.0.bias'].size())
@@ -178,10 +185,29 @@ def spike_test(args, trainset, testset,  spikeset, device):
         ANN_model = Vgg16(activate=args.activate)
     ANN_model.load_state_dict(stdict)
     ANN_model.to(device)
+    ANN_model.eval()
 
     # SNN Initialize
     inp = torch.ones(1, 3, 32, 32)  # To get neauron size, so simulate as a scalemodel
     model = SpikingVGG16(stdict, block1, block2, bn1, bn2, classifier, inp, device, Vth=args.Vth, Vres=args.Vres)
+
+    """
+    model.to(device)
+    ann2snn_ann_acc = 0
+    for i, data in enumerate(testloader):
+        ann_input, ann_label = data
+        with torch.no_grad():
+            ann_input = ann_input.to(device)
+            ann_label = ann_label.to(device)
+            ann_out = model.ann_forward(ann_input, activate=args.activate)
+            ann_out_argmax = torch.argmax(ann_out, dim=1)
+        acc_tensor = torch.zeros_like(ann_label)
+        acc_tensor[ann_out_argmax==ann_label] = 1
+        ann2snn_ann_acc += acc_tensor.sum().item()
+    print("ANN to SNN's ann acc: {}".format(ann2snn_ann_acc / dlen))
+    model.to('cpu')
+    """
+
     if args.load_normalized_weight is None:
         model.to(device)
         model = CW_Normalize(args, model, trainset, device)
@@ -191,12 +217,8 @@ def spike_test(args, trainset, testset,  spikeset, device):
         model.load_state_dict(torch.load(args.load_normalized_weight, map_location=torch.device('cpu')))
         model.to(device)
         print("=> Already Normalized")
+    model.eval()
 
-    # Data load
-    testloader = torch.utils.data.DataLoader(testset, batch_size=args.batchsize, shuffle=False)
-    spikeloader = torch.utils.data.DataLoader(spikeset, batch_size=args.batchsize, shuffle=False)
-    print("Data nums: ANN-{}, SNN-{}".format(len(testloader), len(spikeloader)))
-    dlen = len(spikeset)
     acc = 0
 
     for i, data in enumerate(zip(testloader, spikeloader)):
@@ -204,13 +226,13 @@ def spike_test(args, trainset, testset,  spikeset, device):
         sp = data[1]
 
         # ANN Test
-        """
+        
         ann_input, ann_label = test_data
         with torch.no_grad():
             ann_input = ann_input.to(device)
             ann_debug_layer = ANN_model.layer_debug(ann_input, layer_num=args.debug_layer, act_mode=args.activate)
             # print(debug_layer.size())
-        """
+        
 
         outspike = torch.zeros(sp[0].size()[0], args.timelength, 10)
         labels = sp[1]
@@ -227,19 +249,23 @@ def spike_test(args, trainset, testset,  spikeset, device):
             # break
 
         model.FireCount(timestep=args.timelength)
-        # snn_debug_layer = model.layer_debug(layer_num=args.debug_layer)
-        # print(snn_debug_layer.size())
-        # LayerViewer(0, test_data[0], torch.sum(sp[0], 1))
-        # LayerViewer(args.debug_layer, ann_debug_layer, snn_debug_layer)
+        
+        view_batch = 0
+        snn_debug_layer = model.layer_debug(layer_num=args.debug_layer)
+        print(snn_debug_layer.size())
+        LayerViewer(0, test_data[0], torch.sum(sp[0], 1), batch=view_batch)
+        LayerViewer(args.debug_layer, ann_debug_layer, snn_debug_layer, batch=view_batch)
 
         spikecount = torch.sum(outspike, axis=1)
         _, spikecount_argmax = torch.max(spikecount, dim=1)
+        print("View batch: Pred {}, Label {}".format(spikecount_argmax[view_batch], labels[view_batch]))
         # print(spikecount_argmax.size())
         # print(torch.cat((torch.unsqueeze(labels, 1), torch.unsqueeze(spikecount_argmax, 1)), 1))
         acc_tensor = torch.zeros_like(labels)
         acc_tensor[spikecount_argmax==labels] = 1
 
         # Save accurate per image
+        """
         bsize = spikecount_argmax.size(0)
         vth_list = torch.full((bsize, 1), args.Vth)
         indecies = torch.arange(bsize).reshape(-1, 1) + (args.batchsize * i)
@@ -248,8 +274,10 @@ def spike_test(args, trainset, testset,  spikeset, device):
         acc_tensor_info = acc_tensor.view(-1, 1)
         saveinfo = np.concatenate([vth_list, indecies, spikecount_argmax_info, labels_info, acc_tensor_info], -1)
         saveCSVrows(saveinfo.tolist(), savecsv)
+        """
 
         acc += acc_tensor.sum().item()
+        break
 
     acc /= dlen
     print("Acc: {}".format(acc))
@@ -260,7 +288,7 @@ def main():
     VthCond = [(i+5)/10 for i in range(11)]
     args = parser.parse_args()
     args.savefolder = os.path.join(args.savefolder, date2foldername())
-    os.makedirs(args.savefolder, exist_ok=True)
+    # os.makedirs(args.savefolder, exist_ok=True)
 
     traintransform = transforms.Compose(
         [transforms.ToTensor(),

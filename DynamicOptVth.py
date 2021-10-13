@@ -182,6 +182,16 @@ def spike_test(args, trainset, testset,  spikeset, device):
             outspike[:, j, :] = out
             # break
 
+            cnt = 0
+            if (j + 1) % 20 == 0:
+                tmp_argmax = torch.max(outspike[:,cnt*20:(cnt+1)*20,:])
+                tmp_acc = torch.zeros_like(labels)
+                tmp_acc[tmp_argmax==labels] = 1
+                print("Vth: {}, Acc: {}".format(args.Vth, tmp_acc.sum().item()))
+                args.Vth += 0.2
+                model.changeVth(args.Vth)
+        break
+
         model.FireCount(timestep=args.timelength)
         # snn_debug_layer = model.layer_debug(layer_num=args.debug_layer)
         # print(snn_debug_layer.size())
