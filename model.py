@@ -211,7 +211,7 @@ class SpikingLinear(nn.Module):
     alpha : float
         slope of LeakyRelu in negative area
     """
-    def __init__(self, N_in, N_out, initW=None, initB=None, device=None, Vth=0.5, Vres=0.0, alpha=0.01, scale=1.0):
+    def __init__(self, N_in, N_out, initW=None, initB=None, device=None, Vth=0.5, Vres=0.0, alpha=0.01, scale=1.0, percentile=0.999):
         super().__init__()
         self.device = device
 
@@ -222,6 +222,7 @@ class SpikingLinear(nn.Module):
         self.Vres = Vres
         self.n_Vth = - Vth / alpha
         self.scale = scale
+        self.percentile = percentile
         self.peak = 1.0
         
         self.firecout = None
@@ -262,11 +263,12 @@ class SpikingLinear(nn.Module):
         self.firecout = torch.zeros_like(self.n).to(self.device)
 
     def ann_forward(self, x):
-        return self.linear(x)
+        x = self.linear(x)
+        return self.activate(x)
 
     def get_lambda(self, x):
         x_tmp = x.detach()
-        x_tmp = torch.quantile(x_tmp, 0.9999, dim=1)
+        x_tmp = torch.quantile(x_tmp, self.percentile, dim=1)
         self.lambda_before.append(x_tmp)
         """
         lambda_tmp = torch.max(x)
@@ -277,7 +279,7 @@ class SpikingLinear(nn.Module):
         n_tmp = self.linear(x)
         n_tmp = self.activate(n_tmp)
         n_tmp_detach = n_tmp.detach()
-        n_tmp_detach = torch.quantile(n_tmp_detach, 0.9999, dim=1)
+        n_tmp_detach = torch.quantile(n_tmp_detach, self.percentile, dim=1)
         self.lambda_after.append(n_tmp_detach)
         """
         lambda_tmp = torch.max(n_tmp)
@@ -290,10 +292,15 @@ class SpikingLinear(nn.Module):
     def maxactivation_normalize(self):
         self.lambda_before = torch.cat(self.lambda_before, 0)
         self.lambda_after = torch.cat(self.lambda_after, 0)
-        self.lambda_before = torch.quantile(self.lambda_before, 0.5)
-        self.lambda_after = torch.quantile(self.lambda_after, 0.5)
-        self.linear.weight.data = self.scale * (self.linear.weight.data / abs(self.lambda_after)) * abs(self.lambda_before)
-        self.linear.bias.data = self.scale * (self.linear.bias.data / abs(self.lambda_after))
+        # self.lambda_before = torch.quantile(self.lambda_before, 0.5)
+        # self.lambda_after = torch.quantile(self.lambda_after, 0.5)
+        self.lambda_before = torch.mean(torch.abs(self.lambda_before))
+        self.lambda_after = torch.mean(torch.abs(self.lambda_after))
+        # self.lambda_before = torch.max(self.lambda_before)
+        # self.lambda_after = torch.max(self.lambda_after)
+        self.lambda_after = abs(self.lambda_after) + 1e-5
+        self.linear.weight.data = self.scale * (self.linear.weight.data / self.lambda_after) * abs(self.lambda_before)
+        self.linear.bias.data = self.scale * (self.linear.bias.data / self.lambda_after)
 
     def forward(self, x):
         self.n += self.linear(x)
@@ -334,7 +341,7 @@ class SpikingConv2d(nn.Module):
     alpha : float
         slope of LeakyRelu in negative area
     """
-    def __init__(self, N_in_ch, N_out_ch, kernel_size=3, padding=1, initW=None, initB=None, device=None, Vth=0.5, Vres=0.0, alpha=0.01, scale=1.0, out_h=1, out_w=1, bn=None):
+    def __init__(self, N_in_ch, N_out_ch, kernel_size=3, padding=1, initW=None, initB=None, device=None, Vth=0.5, Vres=0.0, alpha=0.01, scale=1.0, out_h=1, out_w=1, bn=None, percentile=0.999, input_minus=False):
         super().__init__()
         self.device = device
 
@@ -344,14 +351,16 @@ class SpikingConv2d(nn.Module):
         self.Vres = Vres
         self.n_Vth = - Vth / alpha
         self.scale = scale
+        self.percentile = percentile
         self.peak = 1.0
 
         self.firecout = None
 
+        self.input_minus = input_minus
         self.lambda_before = []
         self.lambda_after = []
 
-        if alpha == 0:
+        if alpha <= 1e-5:
             self.activate = nn.ReLU()
         else:
             self.activate = nn.LeakyReLU()
@@ -398,16 +407,17 @@ class SpikingConv2d(nn.Module):
         self.firecout = torch.zeros_like(self.n).to(self.device)
 
     def ann_forward(self, x):
-        return self.conv2d(x)
+        x = self.conv2d(x)
+        return self.activate(x)
 
     def get_lambda(self, x):
         """
         Calculate each channel's max
         """
         x_tmp = x.detach()
-        x_tmp = x_tmp.view(x_tmp.size(0), x_tmp.size(1), -1)
+        x_tmp = torch.abs(x_tmp.view(x_tmp.size(0), x_tmp.size(1), -1))
         x_tmp = x_tmp.permute(0, 2, 1)
-        x_tmp = torch.quantile(x_tmp, 0.9999, dim=1)
+        x_tmp = torch.quantile(x_tmp, self.percentile, dim=1)
         # x_tmp = x_tmp.contiguous().view(-1, x_tmp.size(1))
         self.lambda_before.append(x_tmp.detach())
         """
@@ -420,7 +430,7 @@ class SpikingConv2d(nn.Module):
         n_tmp = self.activate(n_tmp)
         n_tmp_reshaped = n_tmp.view(n_tmp.size(0), n_tmp.size(1), -1) # size: (batch_size, channel_size, w*h)
         n_tmp_reshaped = n_tmp_reshaped.permute(0, 2, 1) # size: (batch_size, w*h, channel_size)
-        n_tmp_reshaped = torch.quantile(n_tmp_reshaped, 0.9999, dim=1) # size: (batch_size, channel_size)
+        n_tmp_reshaped = torch.quantile(n_tmp_reshaped, self.percentile, dim=1) # size: (batch_size, channel_size)
         # n_tmp_reshaped = n_tmp_reshaped.contiguous().view(-1, n_tmp_reshaped.size(1))
         self.lambda_after.append(n_tmp_reshaped.detach())
         """
@@ -436,13 +446,21 @@ class SpikingConv2d(nn.Module):
         self.lambda_after = torch.cat(self.lambda_after, 0)
         out_ch = self.lambda_after.size(1)
         inp_ch = self.lambda_before.size(1)
-        self.lambda_before = torch.quantile(self.lambda_before, 0.5, dim=0)
-        self.lambda_after = torch.quantile(self.lambda_after, 0.5, dim=0)
+        # self.lambda_before = torch.quantile(self.lambda_before, 0.5, dim=0)
+        # self.lambda_after = torch.quantile(self.lambda_after, 0.5, dim=0)
+        self.lambda_before = torch.mean(torch.abs(self.lambda_before), dim=0)
+        self.lambda_after = torch.mean(torch.abs(self.lambda_after), dim=0)
+        # self.lambda_before, _ = torch.max(self.lambda_before, dim=0)
+        # self.lambda_after, _ = torch.max(self.lambda_after, dim=0)
+        self.lambda_after = torch.abs(self.lambda_after) + 1e-5
+
+        if self.input_minus:
+            self.lambda_before = torch.ones_like(self.lambda_before).to(self.device)
 
         for i in range(out_ch):
-            self.conv2d.bias.data[i] = self.scale * (self.conv2d.bias.data[i] / abs(self.lambda_after[i]))
+            self.conv2d.bias.data[i] = self.scale * (self.conv2d.bias.data[i] / self.lambda_after[i])
             for j in range(inp_ch):
-                self.conv2d.weight.data[i, j, :, :] = self.scale * (self.conv2d.weight.data[i, j, :, :] / abs(self.lambda_after[i])) * abs(self.lambda_before[j])
+                self.conv2d.weight.data[i, j, :, :] = self.scale * (self.conv2d.weight.data[i, j, :, :] / self.lambda_after[i]) * abs(self.lambda_before[j])
     
     def forward(self, x):
         self.n += self.conv2d(x)
@@ -557,14 +575,23 @@ class SpikingRandomPool2d(nn.Module):
 
 
 class SpikingVGG16(nn.Module):
-    def __init__(self, stdict, block1, block2, bn1, bn2, classifier, set_x, device, Vth=0.5, Vres=0.0, scale=1.0):
+    def __init__(self, stdict, block1, block2, bn1, bn2, classifier, set_x, device, Vth=0.5, Vres=0.0, activate="leaky", scale=1.0, percentile=0.999):
         super().__init__()
         self.num_class = 10
         self.blockparams1 = block1
         self.blockparams2 = block2
         self.classifier = classifier
 
+        if activate == "relu":
+            alpha = 1e-9
+        elif activate == "leaky":
+            alpha = 1e-2
+        else:
+            raise ValueError
+
         block_concat = []
+        layer = 0
+        input_minus = False
         for b, bnk in zip(self.blockparams1, bn1):
             bns = []
             for bn_keys in bnk:
@@ -572,13 +599,17 @@ class SpikingVGG16(nn.Module):
                     bns.append([stdict[k] for k in bn_keys])
                 else:
                     bns.append(None)
+            if layer == 0:
+                input_minus = True
             block_concat.extend([
-                SpikingConv2d(b[0], b[1], kernel_size=3, padding=1, initW=stdict[b[2]], initB=stdict[b[3]], device=device, Vth=Vth, Vres=Vres, scale=scale, bn=bns[0]),
-                SpikingConv2d(b[1], b[1], kernel_size=3, padding=1, initW=stdict[b[4]], initB=stdict[b[5]], device=device, Vth=Vth, Vres=Vres, scale=scale, bn=bns[1]),
+                SpikingConv2d(b[0], b[1], kernel_size=3, padding=1, initW=stdict[b[2]], initB=stdict[b[3]], device=device, Vth=Vth, Vres=Vres, alpha=alpha, scale=scale, bn=bns[0], percentile=percentile, input_minus=input_minus),
+                SpikingConv2d(b[1], b[1], kernel_size=3, padding=1, initW=stdict[b[4]], initB=stdict[b[5]], device=device, Vth=Vth, Vres=Vres, alpha=alpha, scale=scale, bn=bns[1], percentile=percentile),
                 SpikingRandomPool2d(kernel_size=2, stride=2, device=device)
                 # nn.AvgPool2d(kernel_size=2, stride=2),
                 # SpikingAvgPool2d(kernel_size=2, stride=2, device=device, Vth=Vth, Vres=Vres)  # Use Avepool2d instead of nn.MaxPool2d(kernel_size=2, stride=2) in SNN
             ])
+            layer += 1
+            input_minus = False
         for b, bnk in zip(self.blockparams2, bn2):
             bns = []
             for bn_keys in bnk:
@@ -588,9 +619,9 @@ class SpikingVGG16(nn.Module):
                     bns.append(None)
 
             block_concat.extend([
-                SpikingConv2d(b[0], b[1], kernel_size=3, padding=1, initW=stdict[b[2]], initB=stdict[b[3]], device=device, Vth=Vth, Vres=Vres, scale=scale, bn=bns[0]),
-                SpikingConv2d(b[1], b[1], kernel_size=3, padding=1, initW=stdict[b[4]], initB=stdict[b[5]], device=device, Vth=Vth, Vres=Vres, scale=scale, bn=bns[1]),
-                SpikingConv2d(b[1], b[1], kernel_size=3, padding=1, initW=stdict[b[6]], initB=stdict[b[7]], device=device, Vth=Vth, Vres=Vres, scale=scale, bn=bns[2]),
+                SpikingConv2d(b[0], b[1], kernel_size=3, padding=1, initW=stdict[b[2]], initB=stdict[b[3]], device=device, Vth=Vth, Vres=Vres, alpha=alpha, scale=scale, bn=bns[0], percentile=percentile),
+                SpikingConv2d(b[1], b[1], kernel_size=3, padding=1, initW=stdict[b[4]], initB=stdict[b[5]], device=device, Vth=Vth, Vres=Vres, alpha=alpha, scale=scale, bn=bns[1], percentile=percentile),
+                SpikingConv2d(b[1], b[1], kernel_size=3, padding=1, initW=stdict[b[6]], initB=stdict[b[7]], device=device, Vth=Vth, Vres=Vres, alpha=alpha, scale=scale, bn=bns[2], percentile=percentile),
                 SpikingRandomPool2d(kernel_size=2, stride=2, device=device)
                 # nn.AvgPool2d(kernel_size=2, stride=2),
                 # SpikingAvgPool2d(kernel_size=2, stride=2, device=device, Vth=Vth, Vres=Vres)  # Use Avepool2d instead of nn.MaxPool2d(kernel_size=2, stride=2) in SNN
@@ -599,9 +630,9 @@ class SpikingVGG16(nn.Module):
         self.block = nn.Sequential(*block_concat)
 
         self.classifier_concat = nn.Sequential(
-            SpikingLinear(512, 512, initW=stdict[self.classifier[0]], initB=stdict[self.classifier[1]], device=device, Vth=Vth, Vres=Vres, scale=scale),
-            SpikingLinear(512, 32, initW=stdict[self.classifier[2]], initB=stdict[self.classifier[3]], device=device, Vth=Vth, Vres=Vres, scale=scale),
-            SpikingLinear(32, self.num_class, initW=stdict[self.classifier[4]], initB=stdict[self.classifier[5]], device=device, Vth=Vth, Vres=Vres, scale=scale),
+            SpikingLinear(512, 512, initW=stdict[self.classifier[0]], initB=stdict[self.classifier[1]], device=device, Vth=Vth, Vres=Vres, alpha=alpha, scale=scale, percentile=percentile),
+            SpikingLinear(512, 32, initW=stdict[self.classifier[2]], initB=stdict[self.classifier[3]], device=device, Vth=Vth, Vres=Vres, alpha=alpha, scale=scale, percentile=percentile),
+            SpikingLinear(32, self.num_class, initW=stdict[self.classifier[4]], initB=stdict[self.classifier[5]], device=device, Vth=Vth, Vres=Vres, alpha=alpha, scale=scale, percentile=percentile),
         )
         """
         for m in self.modules():
@@ -610,40 +641,28 @@ class SpikingVGG16(nn.Module):
 
         self._set_neurons(set_x) # set membrem voltage
 
-    def _manual_forward(self, x, mode="set_neurons"):
-        apply_instance_2d = (SpikingConv2d, SpikingAvgPool2d, SpikingRandomPool2d)
+    def _manual_forward(self, x, mode="set_neurons", layer_num=None):
+        layer_cnt = 0
+        apply_instance_2d = (SpikingConv2d, SpikingRandomPool2d)
         before_linear = False
         for m in self.modules():
             if isinstance(m, apply_instance_2d):
                 x = getattr(m, mode)(x)
+                layer_cnt += 1
             elif isinstance(m, SpikingLinear):
                 if not before_linear:
                     x = x.view(x.size(0), -1)
                     before_linear = True
                 x = getattr(m, mode)(x)
+                layer_cnt += 1
+
+            if layer_cnt == layer_num:
+                break
 
         return x
 
-    def ann_forward(self, x, activate):
-        activate_factory = {
-            "leaky": nn.LeakyReLU(inplace=True),
-            "relu": nn.ReLU(inplace=True)
-        }
-        activate_func = activate_factory[activate]
-        before_linear = False
-        for m in self.modules():
-            if isinstance(m, SpikingConv2d):
-                x = m.ann_forward(x)
-                x = activate_func(x)
-            elif isinstance(m, SpikingRandomPool2d):
-                x = m.ann_forward(x)
-            elif isinstance(m, SpikingLinear):
-                if not before_linear:
-                    x = x.view(x.size(0), -1)
-                    before_linear = True
-                x = m.ann_forward(x)
-                x = activate_func(x)
-        return x
+    def ann_forward(self, x, layer_num=None):
+        return self._manual_forward(x, mode="ann_forward", layer_num=layer_num)
 
     def calculate_lambda(self, x):
         out = self._manual_forward(x, mode="get_lambda")
