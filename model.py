@@ -299,8 +299,8 @@ class SpikingLinear(nn.Module):
         # self.lambda_before = torch.max(self.lambda_before)
         # self.lambda_after = torch.max(self.lambda_after)
         self.lambda_after = abs(self.lambda_after) + 1e-5
-        self.linear.weight.data = self.scale * (self.linear.weight.data / self.lambda_after) * abs(self.lambda_before)
-        self.linear.bias.data = self.scale * (self.linear.bias.data / self.lambda_after)
+        self.linear.weight.data = (self.linear.weight.data / self.lambda_after) * abs(self.lambda_before)
+        self.linear.bias.data = self.linear.bias.data / self.lambda_after
 
     def forward(self, x):
         self.n += self.linear(x)
@@ -310,7 +310,7 @@ class SpikingLinear(nn.Module):
         spike[self.n < self.n_Vth] = -self.peak
         spike.to(self.device)
 
-        self.firecout += spike
+        self.firecout += spike * self.scale
 
         self.n[self.n > self.Vth] -= self.Vth
         self.n[self.n < self.n_Vth] -= self.n_Vth
@@ -458,9 +458,9 @@ class SpikingConv2d(nn.Module):
             self.lambda_before = torch.ones_like(self.lambda_before).to(self.device)
 
         for i in range(out_ch):
-            self.conv2d.bias.data[i] = self.scale * (self.conv2d.bias.data[i] / self.lambda_after[i])
+            self.conv2d.bias.data[i] = self.conv2d.bias.data[i] / self.lambda_after[i]
             for j in range(inp_ch):
-                self.conv2d.weight.data[i, j, :, :] = self.scale * (self.conv2d.weight.data[i, j, :, :] / self.lambda_after[i]) * abs(self.lambda_before[j])
+                self.conv2d.weight.data[i, j, :, :] = (self.conv2d.weight.data[i, j, :, :] / self.lambda_after[i]) * abs(self.lambda_before[j])
     
     def forward(self, x):
         self.n += self.conv2d(x)
@@ -470,7 +470,7 @@ class SpikingConv2d(nn.Module):
         spike[self.n < self.n_Vth] = -self.peak
         spike.to(self.device)
 
-        self.firecout += spike
+        self.firecout += spike * self.scale
 
         self.n[self.n > self.Vth] -= self.Vth
         self.n[self.n < self.n_Vth] -= self.n_Vth
@@ -728,6 +728,7 @@ class SpikingVGG16(nn.Module):
         apply_instance = (SpikingConv2d, SpikingLinear)
         for m in self.modules():
             if isinstance(m, apply_instance):
+                m.scale = 1.0 / Vth
                 m.Vth = Vth
                 m.n_Vth = -Vth / m.alpha
 

@@ -51,8 +51,8 @@ def main(args):
     PerImage_y_list = []
 
     for f in csv_files:
-        with open(os.path.join(args.csvDir, f)) as f:
-            reader = csv.reader(f)
+        with open(os.path.join(args.csvDir, f)) as rf:
+            reader = csv.reader(rf)
             rows = [row for row in reader]
 
         class_idx, acc = getAccPerClass(rows=rows[1:])
@@ -60,10 +60,12 @@ def main(args):
         x, y = getAccIndex(rows=rows[1:])
         PerImage_x_list.append(x)
         PerImage_y_list.append(y)
+        print("File {}, Acc {}".format(f, acc[0]))
     
     PerImage_x = np.concatenate(PerImage_x_list)
     PerImage_y = np.concatenate(PerImage_y_list)
     
+    # Accurate plot per image
     ax1.scatter(PerImage_x, PerImage_y, s=0.5)
     ax2.set_xticks(class_idx)
     ax2.legend()

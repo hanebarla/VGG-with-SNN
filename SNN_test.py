@@ -11,18 +11,20 @@ from utils import SpikeEncodeDatasets, date2foldername, saveCSVrow, saveCSVrows
 
 
 parser = argparse.ArgumentParser(description='PyTorch Spiking Test')
-parser.add_argument('--batchsize', default=128, type=int)
-parser.add_argument('--scale', default=1.0, type=float)
-parser.add_argument('--Vth', default=1.0, type=float)
-parser.add_argument('--Vres', default=0.0, type=float)
-parser.add_argument('--activate', default="leaky")
-parser.add_argument('--debug_layer', default=1, type=int)
-parser.add_argument('--timelength', default=100, type=int)
-parser.add_argument('--bn', default=0, type=int)
-parser.add_argument('--percentile', default=0.999, type=float)
-parser.add_argument('--load_weight', default=None)
-parser.add_argument('--load_normalized_weight', default=None)
-parser.add_argument('--savefolder', default="SNN_Test_Results/")
+parser.add_argument('--batchsize', default=128, type=int, help="specify bachsize")
+parser.add_argument('--scale', default=1.0, type=float, help="To change weight for fire corresponding to Vth")
+parser.add_argument('--Vth', default=1.0, type=float, help="spike threshold")
+parser.add_argument('--Vres', default=0.0, type=float, help="membren voltage when reset")
+parser.add_argument('--activate', default="leaky", help="Specify activate function")
+parser.add_argument('--debug_layer', default=0, type=int, help="Specify to view debug layer")
+parser.add_argument('--timelength', default=100, type=int, help="Specify time length")
+parser.add_argument('--bn', default=0, type=int, help="Activate Batch Norm layer")
+parser.add_argument('--percentile', default=0.999, type=float, help="Spcify normalize percentile")
+parser.add_argument('--load_weight', default=None, help="ANN trained model file path")
+parser.add_argument('--load_normalized_weight', default=None, help="SNN trained model normalized from ANN model")
+parser.add_argument('--savefolder', default="SNN_Test_Results/", help="Experiment or Debug layer Save path")
+parser.add_argument('--change_Vth', default=0, type=int, help="Explement condition one Vth or some Vth's")  # bool
+parser.add_argument('--logging', default=0, type=int, help="if we want to save csv data per image")  # bool
 
 
 # Calculate lambda(max activations), and channel-wise Normalize
@@ -97,8 +99,10 @@ def LayerViewer(layer_num, ann_layer, snn_layer, batch=0):
 
 
 def spike_test(args, trainset, testset,  spikeset, device):
-    # savecsv = os.path.join(args.savefolder, "Vth-{}_result_per_image.csv".format(args.Vth))
-    # saveCSVrow(["Vth","index","spike_argmax","label","acc"], savecsv)
+    # logging set up
+    if args.logging == 1:
+        savecsv = os.path.join(args.savefolder, "Vth-{}_result_per_image.csv".format(args.Vth))
+        saveCSVrow(["Vth","index","spike_argmax","label","acc"], savecsv)
 
     # Data load
     testloader = torch.utils.data.DataLoader(testset, batch_size=args.batchsize, shuffle=False)
@@ -293,12 +297,12 @@ def spike_test(args, trainset, testset,  spikeset, device):
             # break
 
         model.FireCount(timestep=args.timelength)
-
-        # view_batch = 0
-        # snn_debug_layer = model.layer_debug(layer_num=args.debug_layer)
-        # print(snn_debug_layer.size())
-        # LayerViewer(0, test_data[0], torch.sum(sp[0], 1), batch=view_batch)
-        # LayerViewer(args.debug_layer, ann_debug_layer, snn_debug_layer, batch=view_batch)
+        if args.debug_layer != 0:
+            view_batch = 0
+            snn_debug_layer = model.layer_debug(layer_num=args.debug_layer)
+            print(snn_debug_layer.size())
+            LayerViewer(0, test_data[0], torch.sum(sp[0], 1), batch=view_batch)
+            LayerViewer(args.debug_layer, ann_debug_layer, snn_debug_layer, batch=view_batch)
 
         spikecount = torch.sum(outspike, axis=1)
         _, spikecount_argmax = torch.max(spikecount, dim=1)
@@ -309,19 +313,20 @@ def spike_test(args, trainset, testset,  spikeset, device):
         acc_tensor[spikecount_argmax==labels] = 1
 
         # Save accurate per image
-        """
-        bsize = spikecount_argmax.size(0)
-        vth_list = torch.full((bsize, 1), args.Vth)
-        indecies = torch.arange(bsize).reshape(-1, 1) + (args.batchsize * i)
-        spikecount_argmax_info = spikecount_argmax.view(-1, 1)
-        labels_info = labels.view(-1, 1)
-        acc_tensor_info = acc_tensor.view(-1, 1)
-        saveinfo = np.concatenate([vth_list, indecies, spikecount_argmax_info, labels_info, acc_tensor_info], -1)
-        saveCSVrows(saveinfo.tolist(), savecsv)
-        """
+        if args.logging == 1:
+            bsize = spikecount_argmax.size(0)
+            vth_list = torch.full((bsize, 1), args.Vth)
+            indecies = torch.arange(bsize).reshape(-1, 1) + (args.batchsize * i)
+            spikecount_argmax_info = spikecount_argmax.view(-1, 1)
+            labels_info = labels.view(-1, 1)
+            acc_tensor_info = acc_tensor.view(-1, 1)
+            saveinfo = np.concatenate([vth_list, indecies, spikecount_argmax_info, labels_info, acc_tensor_info], -1)
+            saveCSVrows(saveinfo.tolist(), savecsv)
 
         acc += acc_tensor.sum().item()
-        # break
+
+        if args.debug_layer != 0:
+            break
 
     acc /= dlen
     print("Acc: {}".format(acc))
@@ -329,10 +334,7 @@ def spike_test(args, trainset, testset,  spikeset, device):
 
 
 def main():
-    VthCond = [(i+5)/10 for i in range(11)]
     args = parser.parse_args()
-    args.savefolder = os.path.join(args.savefolder, date2foldername())
-    # os.makedirs(args.savefolder, exist_ok=True)
 
     traintransform = transforms.Compose(
         [transforms.ToTensor(),
@@ -346,13 +348,17 @@ def main():
     device =  torch.device("cuda" if torch.cuda.is_available() else "cpu") 
     print(device)
 
-    spike_test(args, trainset, testset, Spikes, device)
-    """
-    for vth in VthCond:
-        print("========== Vth: {} ==========".format(vth))
-        args.Vth = vth
+    if args.change_Vth == 0:
         spike_test(args, trainset, testset, Spikes, device)
-    """
+    elif args.change_Vth == 1:
+        args.savefolder = os.path.join(args.savefolder, date2foldername())
+        os.makedirs(args.savefolder, exist_ok=True)
+        VthCond = [(i+5)/10 for i in range(11)]
+        for vth in VthCond:
+            print("========== Vth: {} ==========".format(vth))
+            args.Vth = vth
+            spike_test(args, trainset, testset, Spikes, device)
+    
 
 
 
