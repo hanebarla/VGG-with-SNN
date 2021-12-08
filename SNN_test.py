@@ -48,6 +48,7 @@ def CW_Normalize(args, model, trainset, device):
 
     acc /= dleng
     print("ANN Train Acc: {}".format(acc)) # Check the accuracy in Trainset with ANN
+    print("Normalizing Model ...")
     model.channel_wised_normlization()
     print("=> Model Normalize Success")
 
@@ -189,7 +190,8 @@ def spike_test(args, trainset, testset,  spikeset, device):
     ANN_model.to(device)
     ANN_model.eval()
 
-    # ANN test with spike dataset
+    """
+    # ANN model test with spike dataset
     AnnWithSpike_acc = 0
     for sp in spikeloader:
         outspike = torch.zeros(sp[0].size()[0], args.timelength, 10)
@@ -209,12 +211,13 @@ def spike_test(args, trainset, testset,  spikeset, device):
         acc_tensor[spikecount_argmax==labels] = 1
         AnnWithSpike_acc += acc_tensor.sum().item()
     print("Ann with Spiking data Acc:{}".format(AnnWithSpike_acc / dlen))
+    """
 
     # SNN Initialize
     inp = torch.ones(1, 3, 32, 32)  # To get neauron size, so simulate as a scalemodel
     model = SpikingVGG16(stdict, block1, block2, bn1, bn2, classifier, inp, device, Vth=args.Vth, Vres=args.Vres, activate=args.activate, percentile=args.percentile)
 
-    # snn model acc check
+    # snn model acc check with ann data
     model.to(device)
     ann2snn_ann_acc = 0
     for i, data in enumerate(testloader):
@@ -241,8 +244,9 @@ def spike_test(args, trainset, testset,  spikeset, device):
         model.to(device)
         print("=> Already Normalized")
     model.eval()
+    # raise ValueError
 
-    # snn model acc check
+    # snn normalized model acc check with ann data
     # model.to(device)
     ann2snn_ann_acc = 0
     for i, data in enumerate(testloader):

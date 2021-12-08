@@ -1,4 +1,3 @@
-from os import isatty, times
 import copy
 import numpy as np
 import torch
@@ -268,9 +267,12 @@ class SpikingLinear(nn.Module):
 
     def get_lambda(self, x):
         x_tmp = x.detach()
+        """
+        x_tmp = torch.quantile(x_tmp, self.percentile, dim=0, keepdim=True)
+        this mathod is Channel-wise (conv) -> layer-wise (FC)"""
         x_tmp = torch.quantile(x_tmp, self.percentile, dim=1)
         self.lambda_before.append(x_tmp)
-        """
+        """ this is approximate method, not used percentile
         lambda_tmp = torch.max(x)
         if lambda_tmp > self.lambda_before:
             self.lambda_before = lambda_tmp
@@ -279,9 +281,13 @@ class SpikingLinear(nn.Module):
         n_tmp = self.linear(x)
         n_tmp = self.activate(n_tmp)
         n_tmp_detach = n_tmp.detach()
-        n_tmp_detach = torch.quantile(n_tmp_detach, self.percentile, dim=1)
-        self.lambda_after.append(n_tmp_detach)
         """
+        n_tmp_detach = torch.quantile(n_tmp_detach, self.percentile, dim=0, keepdim=True)
+        this mathod is Channel-wise (conv) -> layer-wise (FC)"""
+        n_tmp_detach = torch.quantile(n_tmp_detach, self.percentile, dim=1)
+
+        self.lambda_after.append(n_tmp_detach)
+        """ this is approximate method, not used percentile
         lambda_tmp = torch.max(n_tmp)
         if lambda_tmp > self.lambda_after:
             self.lambda_after = lambda_tmp
@@ -292,13 +298,23 @@ class SpikingLinear(nn.Module):
     def maxactivation_normalize(self):
         self.lambda_before = torch.cat(self.lambda_before, 0)
         self.lambda_after = torch.cat(self.lambda_after, 0)
+        # inp_num = self.lambda_before.size(1)
+        # out_num = self.lambda_after.size(1)
         # self.lambda_before = torch.quantile(self.lambda_before, 0.5)
         # self.lambda_after = torch.quantile(self.lambda_after, 0.5)
-        self.lambda_before = torch.mean(torch.abs(self.lambda_before))
-        self.lambda_after = torch.mean(torch.abs(self.lambda_after))
+        self.lambda_before = torch.mean(torch.abs(self.lambda_before), dim=0)
+        self.lambda_after = torch.mean(torch.abs(self.lambda_after), dim=0)
         # self.lambda_before = torch.max(self.lambda_before)
         # self.lambda_after = torch.max(self.lambda_after)
         self.lambda_after = abs(self.lambda_after) + 1e-5
+
+        """
+        # テンソル計算に直す
+        for i in range(out_num):
+            self.linear.bias.data[i] = self.linear.bias.data[i] / self.lambda_after[i]
+            for j in range(inp_num):
+                self.linear.weight.data[i, j] = (self.linear.weight.data[i, j] / self.lambda_after[i]) * abs(self.lambda_before[j])
+        """
         self.linear.weight.data = (self.linear.weight.data / self.lambda_after) * abs(self.lambda_before)
         self.linear.bias.data = self.linear.bias.data / self.lambda_after
 
@@ -457,6 +473,7 @@ class SpikingConv2d(nn.Module):
         if self.input_minus:
             self.lambda_before = torch.ones_like(self.lambda_before).to(self.device)
 
+        # テンソル計算に直す
         for i in range(out_ch):
             self.conv2d.bias.data[i] = self.conv2d.bias.data[i] / self.lambda_after[i]
             for j in range(inp_ch):
