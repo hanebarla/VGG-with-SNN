@@ -495,61 +495,6 @@ class SpikingConv2d(nn.Module):
         return spike
 
 
-# This is Wrong!!
-class SpikingAvgPool2d(nn.Module):
-    def __init__(self, kernel_size=2, stride=2, padding=0, ceil_mode=False, count_include_pad=True, divisor_override=None, device=None, Vth=0.5, Vres=0.0) -> None:
-        super().__init__()
-        self.AvgPool2d = nn.AvgPool2d(
-            kernel_size=kernel_size,
-            stride=stride,
-            padding=padding,
-            ceil_mode=ceil_mode,
-            count_include_pad=count_include_pad,
-            divisor_override=divisor_override
-        )
-
-        self.device = device
-        self.Vth = Vth
-        self.Vres = Vres
-        self.n = None
-        self.peak = float(1.0)
-
-        self.firecout = 0
-
-    def set_neurons(self, x):
-        n_tmp = self.AvgPool2d(x)
-        self.n = torch.zeros_like(n_tmp)
-        return n_tmp
-
-    # Spiking AveratePool2d is not need to get lambda, but other layer needs.
-    def get_lambda(self, x):
-        return self.AvgPool2d(x)
-
-    def ann_forward(self, x):
-        return self.AvgPool2d(x)
-
-    def reset_batch_neurons(self, bsize):
-        self.n = torch.zeros(bsize, self.n.size()[1], self.n.size()[2], self.n.size()[3])
-        self.n = self.n.to(self.device)
-
-        self.firecout = torch.zeros_like(self.n).to(self.device)
-
-    def forward(self, x):
-        self.n += self.AvgPool2d(x)
-
-        spike = torch.zeros_like(self.n)
-        spike[self.n > self.Vth] = self.peak
-        spike[self.n < -self.Vth] = -self.peak # avepool2dの負方向のスパイクの閾値はとりあえず-Vthに
-        spike.to(self.device)
-
-        self.firecout += spike
-
-        self.n[self.n > self.Vth] -= self.Vth
-        self.n[self.n < -self.Vth] += self.Vth
-
-        return spike
-
-
 class SpikingRandomPool2d(nn.Module):
     def __init__(self, kernel_size=2, stride=2, padding=0, device=None, Vth=0.5, Vres=0.0) -> None:
         super().__init__()
@@ -622,8 +567,6 @@ class SpikingVGG16(nn.Module):
                 SpikingConv2d(b[0], b[1], kernel_size=3, padding=1, initW=stdict[b[2]], initB=stdict[b[3]], device=device, Vth=Vth, Vres=Vres, alpha=alpha, scale=scale, bn=bns[0], percentile=percentile, input_minus=input_minus),
                 SpikingConv2d(b[1], b[1], kernel_size=3, padding=1, initW=stdict[b[4]], initB=stdict[b[5]], device=device, Vth=Vth, Vres=Vres, alpha=alpha, scale=scale, bn=bns[1], percentile=percentile),
                 SpikingRandomPool2d(kernel_size=2, stride=2, device=device)
-                # nn.AvgPool2d(kernel_size=2, stride=2),
-                # SpikingAvgPool2d(kernel_size=2, stride=2, device=device, Vth=Vth, Vres=Vres)  # Use Avepool2d instead of nn.MaxPool2d(kernel_size=2, stride=2) in SNN
             ])
             layer += 1
             input_minus = False
@@ -640,8 +583,6 @@ class SpikingVGG16(nn.Module):
                 SpikingConv2d(b[1], b[1], kernel_size=3, padding=1, initW=stdict[b[4]], initB=stdict[b[5]], device=device, Vth=Vth, Vres=Vres, alpha=alpha, scale=scale, bn=bns[1], percentile=percentile),
                 SpikingConv2d(b[1], b[1], kernel_size=3, padding=1, initW=stdict[b[6]], initB=stdict[b[7]], device=device, Vth=Vth, Vres=Vres, alpha=alpha, scale=scale, bn=bns[2], percentile=percentile),
                 SpikingRandomPool2d(kernel_size=2, stride=2, device=device)
-                # nn.AvgPool2d(kernel_size=2, stride=2),
-                # SpikingAvgPool2d(kernel_size=2, stride=2, device=device, Vth=Vth, Vres=Vres)  # Use Avepool2d instead of nn.MaxPool2d(kernel_size=2, stride=2) in SNN
             ])
 
         self.block = nn.Sequential(*block_concat)
@@ -651,13 +592,10 @@ class SpikingVGG16(nn.Module):
             SpikingLinear(512, 32, initW=stdict[self.classifier[2]], initB=stdict[self.classifier[3]], device=device, Vth=Vth, Vres=Vres, alpha=alpha, scale=scale, percentile=percentile),
             SpikingLinear(32, self.num_class, initW=stdict[self.classifier[4]], initB=stdict[self.classifier[5]], device=device, Vth=Vth, Vres=Vres, alpha=alpha, scale=scale, percentile=percentile),
         )
-        """
-        for m in self.modules():
-            print(m)
-        """
 
         self._set_neurons(set_x) # set membrem voltage
 
+    # kwargsを使ってほかのものも
     def _manual_forward(self, x, mode="set_neurons", layer_num=None):
         layer_cnt = 0
         apply_instance_2d = (SpikingConv2d, SpikingRandomPool2d)
@@ -696,7 +634,7 @@ class SpikingVGG16(nn.Module):
         _ = self._manual_forward(x, mode="set_neurons")
 
     def reset(self, bsize):
-        apply_instance = (SpikingAvgPool2d, SpikingConv2d, SpikingLinear)
+        apply_instance = (SpikingConv2d, SpikingLinear)
         for m in self.modules():
             if isinstance(m, apply_instance):
                 m.reset_batch_neurons(bsize)
@@ -719,7 +657,7 @@ class SpikingVGG16(nn.Module):
         return fire_map
 
     def FireCount(self, timestep=100):
-        apply_instance = (SpikingAvgPool2d, SpikingConv2d, SpikingLinear)
+        apply_instance = (SpikingConv2d, SpikingLinear)
         firerate_max = []
         firerate_min = []
         firerate_mean = []

@@ -11,7 +11,7 @@ from utils import SpikeEncodeDatasets
 
 
 parser = argparse.ArgumentParser(description='PyTorch Model Convert')
-parser.add_argument('--batchsize', default=128, type=int, help="specify bachsize")
+parser.add_argument('--batchsize', default=512, type=int, help="specify bachsize")
 parser.add_argument('--scale', default=1.0, type=float, help="To change weight for fire corresponding to Vth")
 parser.add_argument('--Vth', default=1.0, type=float, help="spike threshold")
 parser.add_argument('--Vres', default=0.0, type=float, help="membren voltage when reset")
@@ -24,25 +24,13 @@ parser.add_argument('--load_normalized_weight', default=None, help="SNN trained 
 
 # Calculate lambda(max activations), and channel-wise Normalize
 def CW_Normalize(args, model, trainset, device):
-    dleng = len(trainset)
-    acc = 0
     trainloader = torch.utils.data.DataLoader(trainset, batch_size=args.batchsize)
+    dataForNormalize = next(iter(trainloader))
+    with torch.no_grad():
+        inputs, labels = dataForNormalize
+        inputs = inputs.to(device)
+        outputs = model.calculate_lambda(inputs)
 
-    for data in trainloader:
-        with torch.no_grad():
-            inputs, labels = data
-            inputs = inputs.to(device)
-            labels = labels.to(device)
-            outputs = model.calculate_lambda(inputs)
-
-            output_argmax = torch.argmax(outputs, dim=1)
-
-        acc_tensor = torch.zeros_like(labels)
-        acc_tensor[output_argmax==labels] = 1
-        acc += acc_tensor.sum().item()
-
-    acc /= dleng
-    print("ANN Train Acc: {}".format(acc)) # Check the accuracy in Trainset with ANN
     print("Normalizing Model ...")
     model.channel_wised_normlization()
     print("=> Model Normalize Success")
