@@ -226,8 +226,8 @@ class SpikingLinear(nn.Module):
         
         self.firecout = None
 
-        self.lambda_before = []
-        self.lambda_after = []
+        self.lambda_before = 0
+        self.lambda_after = 0
 
         if alpha == 0:
             self.activate = nn.ReLU()
@@ -267,54 +267,20 @@ class SpikingLinear(nn.Module):
 
     def get_lambda(self, x):
         x_tmp = x.detach()
-        """
-        x_tmp = torch.quantile(x_tmp, self.percentile, dim=0, keepdim=True)
-        this mathod is Channel-wise (conv) -> layer-wise (FC)"""
-        x_tmp = torch.quantile(x_tmp, self.percentile, dim=1)
-        self.lambda_before.append(x_tmp)
-        """ this is approximate method, not used percentile
-        lambda_tmp = torch.max(x)
-        if lambda_tmp > self.lambda_before:
-            self.lambda_before = lambda_tmp
-        """
+        x_tmp = torch.quantile(x_tmp, self.percentile)
+        self.lambda_before = x_tmp
 
         n_tmp = self.linear(x)
         n_tmp = self.activate(n_tmp)
         n_tmp_detach = n_tmp.detach()
-        """
-        n_tmp_detach = torch.quantile(n_tmp_detach, self.percentile, dim=0, keepdim=True)
-        this mathod is Channel-wise (conv) -> layer-wise (FC)"""
-        n_tmp_detach = torch.quantile(n_tmp_detach, self.percentile, dim=1)
+        n_tmp_detach = torch.quantile(n_tmp_detach, self.percentile)
 
-        self.lambda_after.append(n_tmp_detach)
-        """ this is approximate method, not used percentile
-        lambda_tmp = torch.max(n_tmp)
-        if lambda_tmp > self.lambda_after:
-            self.lambda_after = lambda_tmp
-        """
+        self.lambda_after = n_tmp_detach
 
         return n_tmp
 
     def maxactivation_normalize(self):
-        self.lambda_before = torch.cat(self.lambda_before, 0)
-        self.lambda_after = torch.cat(self.lambda_after, 0)
-        # inp_num = self.lambda_before.size(1)
-        # out_num = self.lambda_after.size(1)
-        # self.lambda_before = torch.quantile(self.lambda_before, 0.5)
-        # self.lambda_after = torch.quantile(self.lambda_after, 0.5)
-        self.lambda_before = torch.mean(torch.abs(self.lambda_before), dim=0)
-        self.lambda_after = torch.mean(torch.abs(self.lambda_after), dim=0)
-        # self.lambda_before = torch.max(self.lambda_before)
-        # self.lambda_after = torch.max(self.lambda_after)
         self.lambda_after = abs(self.lambda_after) + 1e-5
-
-        """
-        # テンソル計算に直す
-        for i in range(out_num):
-            self.linear.bias.data[i] = self.linear.bias.data[i] / self.lambda_after[i]
-            for j in range(inp_num):
-                self.linear.weight.data[i, j] = (self.linear.weight.data[i, j] / self.lambda_after[i]) * abs(self.lambda_before[j])
-        """
         self.linear.weight.data = (self.linear.weight.data / self.lambda_after) * abs(self.lambda_before)
         self.linear.bias.data = self.linear.bias.data / self.lambda_after
 
@@ -373,8 +339,8 @@ class SpikingConv2d(nn.Module):
         self.firecout = None
 
         self.input_minus = input_minus
-        self.lambda_before = []
-        self.lambda_after = []
+        self.lambda_before = None
+        self.lambda_after = None
 
         if alpha <= 1e-5:
             self.activate = nn.ReLU()
@@ -431,43 +397,27 @@ class SpikingConv2d(nn.Module):
         Calculate each channel's max
         """
         x_tmp = x.detach()
-        x_tmp = torch.abs(x_tmp.view(x_tmp.size(0), x_tmp.size(1), -1))
-        x_tmp = x_tmp.permute(0, 2, 1)
+        x_tmp = x_tmp.permute(1, 0, 2, 3)
+        x_tmp = x_tmp.contiguous().view(x_tmp.size(0), -1)
         x_tmp = torch.quantile(x_tmp, self.percentile, dim=1)
         # x_tmp = x_tmp.contiguous().view(-1, x_tmp.size(1))
-        self.lambda_before.append(x_tmp.detach())
-        """
-        x_batch_ch_max, _ = torch.max(x_tmp, 2)
-        x_ch_max, _  = torch.max(x_batch_ch_max, 0)
-        self.lambda_before = torch.where(self.lambda_before < x_ch_max, x_ch_max, self.lambda_before)
-        """
+        self.lambda_before = x_tmp.detach()
 
         n_tmp = self.conv2d(x)
         n_tmp = self.activate(n_tmp)
-        n_tmp_reshaped = n_tmp.view(n_tmp.size(0), n_tmp.size(1), -1) # size: (batch_size, channel_size, w*h)
-        n_tmp_reshaped = n_tmp_reshaped.permute(0, 2, 1) # size: (batch_size, w*h, channel_size)
-        n_tmp_reshaped = torch.quantile(n_tmp_reshaped, self.percentile, dim=1) # size: (batch_size, channel_size)
+
+        n_tmp_reshaped = n_tmp.detach()
+        n_tmp_reshaped = n_tmp_reshaped.permute(1, 0, 2, 3) # size: (batch_size, channel_size, w, h) -> (channel_size, batch_size, w, h)
+        n_tmp_reshaped = n_tmp_reshaped.contiguous().view(n_tmp_reshaped.size(0), -1) # size: (channel_size, batch_size, w*h) -> (channel_size, batch_size*w*h)
+        n_tmp_reshaped = torch.quantile(n_tmp_reshaped, self.percentile, dim=1) # size: (channel_size, batch_size*w*h) -> (channel_size)
         # n_tmp_reshaped = n_tmp_reshaped.contiguous().view(-1, n_tmp_reshaped.size(1))
-        self.lambda_after.append(n_tmp_reshaped.detach())
-        """
-        batch_ch_max, _ = torch.max(n_tmp_reshaped, 2) # size: (batch_size, channel_size)
-        ch_max, _ = torch.max(batch_ch_max, 0) # size(channel_size)
-        self.lambda_after = torch.where(self.lambda_after < ch_max, ch_max, self.lambda_after)
-        """
+        self.lambda_after = n_tmp_reshaped.detach()
 
         return n_tmp
 
     def channel_wise_normalize(self):
-        self.lambda_before = torch.cat(self.lambda_before, 0)
-        self.lambda_after = torch.cat(self.lambda_after, 0)
-        out_ch = self.lambda_after.size(1)
-        inp_ch = self.lambda_before.size(1)
-        # self.lambda_before = torch.quantile(self.lambda_before, 0.5, dim=0)
-        # self.lambda_after = torch.quantile(self.lambda_after, 0.5, dim=0)
-        self.lambda_before = torch.mean(torch.abs(self.lambda_before), dim=0)
-        self.lambda_after = torch.mean(torch.abs(self.lambda_after), dim=0)
-        # self.lambda_before, _ = torch.max(self.lambda_before, dim=0)
-        # self.lambda_after, _ = torch.max(self.lambda_after, dim=0)
+        out_ch = self.lambda_after.size(0)
+        inp_ch = self.lambda_before.size(0)
         self.lambda_after = torch.abs(self.lambda_after) + 1e-5
 
         if self.input_minus:
@@ -537,12 +487,13 @@ class SpikingRandomPool2d(nn.Module):
 
 
 class SpikingVGG16(nn.Module):
-    def __init__(self, stdict, block1, block2, bn1, bn2, classifier, set_x, device, Vth=0.5, Vres=0.0, activate="leaky", scale=1.0, percentile=0.999):
+    def __init__(self, stdict, block1, block2, bn1, bn2, classifier, set_x, device, Vth=1.0, Vres=0.0, activate="leaky", scale=1.0, percentile=0.999):
         super().__init__()
         self.num_class = 10
         self.blockparams1 = block1
         self.blockparams2 = block2
         self.classifier = classifier
+        self.outscale = 1.0 * Vth
 
         if activate == "relu":
             alpha = 1e-9
@@ -675,7 +626,7 @@ class SpikingVGG16(nn.Module):
     def forward(self, x):
         x = self.block(x)
         x = x.view(x.size(0), -1)
-        output = self.classifier_concat(x)
+        output = self.classifier_concat(x) * self.outscale # when Vth is changed, we should scale this
 
         return output
 
@@ -683,9 +634,10 @@ class SpikingVGG16(nn.Module):
         apply_instance = (SpikingConv2d, SpikingLinear)
         for m in self.modules():
             if isinstance(m, apply_instance):
-                m.scale = 1.0 / Vth
+                m.scale = 1.0 * Vth
                 m.Vth = Vth
                 m.n_Vth = -Vth / m.alpha
+                self.outscale = 1.0 * Vth
 
 
 if __name__ == "__main__":

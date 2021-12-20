@@ -49,7 +49,7 @@ def printSave(message, filename):
 
 
 def saveCSVrow(row, filename):
-    with open(filename, "a") as f:
+    with open(filename, "a", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(row)
 

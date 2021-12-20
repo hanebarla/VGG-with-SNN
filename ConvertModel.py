@@ -20,6 +20,7 @@ parser.add_argument('--bn', default=0, type=int, help="Activate Batch Norm layer
 parser.add_argument('--percentile', default=0.999, type=float, help="Spcify normalize percentile")
 parser.add_argument('--load_weight', default=None, help="ANN trained model file path")
 parser.add_argument('--load_normalized_weight', default=None, help="SNN trained model normalized from ANN model")
+parser.add_argument('--timelength', default=100, type=int, help="Specify time length")
 
 
 # Calculate lambda(max activations), and channel-wise Normalize

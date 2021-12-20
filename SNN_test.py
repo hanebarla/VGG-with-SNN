@@ -24,7 +24,7 @@ parser.add_argument('--load_weight', default=None, help="ANN trained model file 
 parser.add_argument('--load_normalized_weight', default=None, help="SNN trained model normalized from ANN model")
 parser.add_argument('--savefolder', default="SNN_Test_Results/", help="Experiment or Debug layer Save path")
 parser.add_argument('--change_Vth', default=0, type=int, help="Explement condition one Vth or some Vth's")  # bool
-parser.add_argument('--logging', default=0, type=int, help="if we want to save csv data per image")  # bool
+parser.add_argument('--logging', default=1, type=int, help="if we want to save csv data per image")  # bool
 
 
 # Calculate lambda(max activations), and channel-wise Normalize
@@ -103,6 +103,7 @@ def spike_test(args, trainset, testset,  spikeset, device):
     # logging set up
     if args.logging == 1:
         savecsv = os.path.join(args.savefolder, "Vth-{}_result_per_image.csv".format(args.Vth))
+        accTimestepCSV = os.path.join(args.savefolder, "Vth-{}_batchAcc_per_time.csv".format(args.Vth))
         saveCSVrow(["Vth","index","spike_argmax","label","acc"], savecsv)
 
     # Data load
@@ -218,6 +219,7 @@ def spike_test(args, trainset, testset,  spikeset, device):
     model = SpikingVGG16(stdict, block1, block2, bn1, bn2, classifier, inp, device, Vth=args.Vth, Vres=args.Vres, activate=args.activate, percentile=args.percentile)
 
     # snn model acc check with ann data
+    """
     model.to(device)
     ann2snn_ann_acc = 0
     for i, data in enumerate(testloader):
@@ -232,6 +234,7 @@ def spike_test(args, trainset, testset,  spikeset, device):
         ann2snn_ann_acc += acc_tensor.sum().item()
     print("ANN to SNN's ann acc: {}".format(ann2snn_ann_acc / dlen))
     model.to('cpu')
+    """
 
     # Normalize parameters of ann model to the snn model's
     if args.load_normalized_weight is None:
@@ -248,6 +251,7 @@ def spike_test(args, trainset, testset,  spikeset, device):
 
     # snn normalized model acc check with ann data
     # model.to(device)
+    """
     ann2snn_ann_acc = 0
     for i, data in enumerate(testloader):
         ann_input, ann_label = data
@@ -260,6 +264,7 @@ def spike_test(args, trainset, testset,  spikeset, device):
         acc_tensor[ann_out_argmax==ann_label] = 1
         ann2snn_ann_acc += acc_tensor.sum().item()
     print("ANN to SNN's ann acc(normalized): {}".format(ann2snn_ann_acc / dlen))
+    """
     # model.to('cpu')
 
     acc = 0
@@ -267,14 +272,16 @@ def spike_test(args, trainset, testset,  spikeset, device):
     for i, data in enumerate(zip(testloader, spikeloader)):
         test_data = data[0]
         sp = data[1]
+        Acc_step_per_batch = []
 
         # ANN Test
-        ann_input, ann_label = test_data
-        with torch.no_grad():
-            ann_input = ann_input.to(device)
-            ann_debug_layer = ANN_model.layer_debug(ann_input, layer_num=args.debug_layer, act_mode=args.activate)
-            # print(debug_layer.size())
-            # normalized_model_map = model.ann_forward(ann_input, layer_num=args.debug_layer)
+        if args.debug_layer != 0:
+            ann_input, ann_label = test_data
+            with torch.no_grad():
+                ann_input = ann_input.to(device)
+                ann_debug_layer = ANN_model.layer_debug(ann_input, layer_num=args.debug_layer, act_mode=args.activate)
+                # print(debug_layer.size())
+                # normalized_model_map = model.ann_forward(ann_input, layer_num=args.debug_layer)
 
         """
         view_batch = 0
@@ -285,7 +292,6 @@ def spike_test(args, trainset, testset,  spikeset, device):
         print(model.block[0].lambda_after)
         """
         
-        # break
         outspike = torch.zeros(sp[0].size()[0], args.timelength, 10)
         labels = sp[1]
         model.reset(sp[0].size()[0])  # batch size to argument
@@ -298,7 +304,14 @@ def spike_test(args, trainset, testset,  spikeset, device):
             with torch.no_grad():
                 out = model(spike)
             outspike[:, j, :] = out
-            # break
+            
+            # log acc per step
+            if args.logging == 1:
+                spikecount = torch.sum(outspike, axis=1)
+                _, spikecount_argmax = torch.max(spikecount, dim=1)
+                acc_tensor = torch.zeros_like(labels)
+                acc_tensor[spikecount_argmax==labels] = 1
+                Acc_step_per_batch.append(acc_tensor.sum().item())
 
         model.FireCount(timestep=args.timelength)
         if args.debug_layer != 0:
@@ -310,9 +323,6 @@ def spike_test(args, trainset, testset,  spikeset, device):
 
         spikecount = torch.sum(outspike, axis=1)
         _, spikecount_argmax = torch.max(spikecount, dim=1)
-        # print("View batch: Pred {}, Label {}".format(spikecount_argmax[view_batch], labels[view_batch]))
-        # print(spikecount_argmax.size())
-        # print(torch.cat((torch.unsqueeze(labels, 1), torch.unsqueeze(spikecount_argmax, 1)), 1))
         acc_tensor = torch.zeros_like(labels)
         acc_tensor[spikecount_argmax==labels] = 1
 
@@ -326,6 +336,7 @@ def spike_test(args, trainset, testset,  spikeset, device):
             acc_tensor_info = acc_tensor.view(-1, 1)
             saveinfo = np.concatenate([vth_list, indecies, spikecount_argmax_info, labels_info, acc_tensor_info], -1)
             saveCSVrows(saveinfo.tolist(), savecsv)
+            saveCSVrow(Acc_step_per_batch, accTimestepCSV)
 
         acc += acc_tensor.sum().item()
 
@@ -352,18 +363,18 @@ def main():
     device =  torch.device("cuda" if torch.cuda.is_available() else "cpu") 
     print(device)
 
+    if args.logging == 1:
+        args.savefolder = os.path.join(args.savefolder, date2foldername())
+        os.makedirs(args.savefolder, exist_ok=True)
+
     if args.change_Vth == 0:
         spike_test(args, trainset, testset, Spikes, device)
     elif args.change_Vth == 1:
-        args.savefolder = os.path.join(args.savefolder, date2foldername())
-        os.makedirs(args.savefolder, exist_ok=True)
         VthCond = [(i+5)/10 for i in range(11)]
         for vth in VthCond:
             print("========== Vth: {} ==========".format(vth))
             args.Vth = vth
             spike_test(args, trainset, testset, Spikes, device)
-    
-
 
 
 if __name__ == "__main__":

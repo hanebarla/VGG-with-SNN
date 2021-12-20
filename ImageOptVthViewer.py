@@ -5,6 +5,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
+DLEN = 0
+
 parser = argparse.ArgumentParser(description='csv analystic')
 parser.add_argument('--csvDir', default=None)
 
@@ -19,7 +21,9 @@ def getAccIndex(rows):
 
 
 def getAccPerClass(rows):
+    global DLEN
     data_num = len(rows)
+    DLEN = data_num
     r_data = np.array(rows[1:], dtype=np.float32)
     class_sets = list(set(r_data[:, -2].tolist()))
     all_acc = r_data[r_data[:, -1]==1.0, 0].shape[0] / data_num
@@ -37,9 +41,9 @@ def getAccPerClass(rows):
     return class_sets, acc
 
 
-def main(args):
+def EachImage(args):
     all_files = os.listdir(args.csvDir)
-    csv_files = [f for f in all_files if ".csv" in f]
+    csv_files = [f for f in all_files if "result_per_image.csv" in f]
     file_num = len(csv_files)
     csv_files.sort()
 
@@ -60,7 +64,7 @@ def main(args):
         x, y = getAccIndex(rows=rows[1:])
         PerImage_x_list.append(x)
         PerImage_y_list.append(y)
-        print("File {}, Acc {}".format(f, acc[0]))
+        print("File {}, Acc {}".format(f, acc[-1]))
     
     PerImage_x = np.concatenate(PerImage_x_list)
     PerImage_y = np.concatenate(PerImage_y_list)
@@ -73,7 +77,45 @@ def main(args):
     savefile = os.path.join(args.csvDir, "Acc_Analay_Plot.png")
     fig.savefig(savefile, dpi=150)
 
+def EachTime(args):
+    all_files = os.listdir(args.csvDir)
+    csv_files = [f for f in all_files if "batchAcc_per_time.csv" in f]
+    file_num = len(csv_files)
+    csv_files.sort()
+
+    fig = plt.figure(figsize=(6, 8))
+    ax1 = fig.add_subplot(211)
+    ax2 = fig.add_subplot(212)
+
+    all_acc_x = []
+    all_acc_y = []
+
+    for f in csv_files:
+        vth = f.replace("Vth-", "")
+        vth = vth.replace("_batchAcc_per_time.csv", "")
+        if vth == "Dynamic":
+            all_acc_x.append(-1)
+        else:
+            all_acc_x.append(float(vth))
+
+        with open(os.path.join(args.csvDir, f)) as rf:
+            reader = csv.reader(rf)
+            rows = [list(map(int, row)) for row in reader]
+    
+        acc_batch_step = np.array(rows)
+        timestep = acc_batch_step.shape[1]
+        acc_batch_step = np.sum(acc_batch_step, axis=0) / DLEN
+        x = np.arange(timestep+1)
+        y = np.pad(acc_batch_step, ((1, 0)))
+        ax1.plot(x, y, label="{}".format(vth))
+        all_acc_y.append(y[-1])
+    
+    ax1.legend()
+    ax2.scatter(all_acc_x, all_acc_y)
+    savefile = os.path.join(args.csvDir, "Acc_TimeStep_Plot.png")
+    fig.savefig(savefile, dpi=150)
 
 if __name__ == "__main__":
     args = parser.parse_args()
-    main(args=args)
+    EachImage(args=args)
+    EachTime(args=args)
