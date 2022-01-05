@@ -65,6 +65,15 @@ def printConfigs(args, filename):
         f.write(vars(args))
 
 
+def is_num(s):
+    try:
+        float(s)
+    except ValueError:
+        return False
+    else:
+        return True
+
+
 if __name__ == "__main__":
     transform = transforms.ToTensor()
     testset = CIFAR10(root='./data', train=False, download=True, transform=transform)

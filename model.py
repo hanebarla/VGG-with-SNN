@@ -1,4 +1,4 @@
-import copy
+import csv
 import numpy as np
 import torch
 import torch.nn as nn
@@ -289,13 +289,15 @@ class SpikingLinear(nn.Module):
 
         spike = torch.zeros_like(self.n)
         spike[self.n > self.Vth] = self.peak
-        spike[self.n < self.n_Vth] = -self.peak
+        if self.alpha > 1e-6:
+            spike[self.n < self.n_Vth] = -self.peak
         spike.to(self.device)
 
         self.firecout += spike * self.scale
 
         self.n[self.n > self.Vth] -= self.Vth
-        self.n[self.n < self.n_Vth] -= self.n_Vth
+        if self.alpha > 1e-6:
+            self.n[self.n < self.n_Vth] -= self.n_Vth
 
         return spike
 
@@ -434,13 +436,15 @@ class SpikingConv2d(nn.Module):
 
         spike = torch.zeros_like(self.n)
         spike[self.n > self.Vth] = self.peak
-        spike[self.n < self.n_Vth] = -self.peak
+        if self.alpha > 1e-6:
+            spike[self.n < self.n_Vth] = -self.peak
         spike.to(self.device)
 
         self.firecout += spike * self.scale
 
         self.n[self.n > self.Vth] -= self.Vth
-        self.n[self.n < self.n_Vth] -= self.n_Vth
+        if self.alpha > 1e-6:
+            self.n[self.n < self.n_Vth] -= self.n_Vth
 
         return spike
 
@@ -622,6 +626,28 @@ class SpikingVGG16(nn.Module):
         firemin = min(firerate_min)
         firemean = sum(firerate_mean)/len(firerate_mean)
         print("Time Step {}, Fire Max Rate: {}, Fire Min Rate: {}, Fire Mean Rate {}".format(timestep, firemax, firemin, firemean))
+
+    def SaveFireCount(self, csvfile, timestep):
+        model_count = 0
+        first_cnt = 0
+        overfire = 0
+        apply_instance = (SpikingConv2d, SpikingLinear)
+        row = [timestep]
+        for m in self.modules():
+            if isinstance(m, apply_instance):
+                layer_cnt = torch.mean(m.firecout).item()
+                if first_cnt == 0:
+                    first_cnt = layer_cnt
+                if layer_cnt > first_cnt:
+                    overfire = 1
+                row.append(layer_cnt)
+                model_count += layer_cnt/(timestep+1)
+
+        with open(csvfile, mode="a") as f:
+            writer = csv.writer(f)
+            writer.writerow(row)
+
+        return model_count, overfire
 
     def forward(self, x):
         x = self.block(x)

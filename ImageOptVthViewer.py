@@ -3,12 +3,14 @@ import csv
 import os
 import matplotlib.pyplot as plt
 import numpy as np
+from utils import is_num
 
 
 DLEN = 0
 
 parser = argparse.ArgumentParser(description='csv analystic')
 parser.add_argument('--csvDir', default=None)
+parser.add_argument('--Fire', default=0, type=int)
 
 
 def getAccIndex(rows):
@@ -80,6 +82,8 @@ def EachImage(args):
 def EachTime(args):
     all_files = os.listdir(args.csvDir)
     csv_files = [f for f in all_files if "batchAcc_per_time.csv" in f]
+    vth_files = [f for f in all_files if "Vth_per_time.csv" in f]
+
     file_num = len(csv_files)
     csv_files.sort()
 
@@ -87,16 +91,10 @@ def EachTime(args):
     ax1 = fig.add_subplot(211)
     ax2 = fig.add_subplot(212)
 
-    all_acc_x = []
-    all_acc_y = []
-
     for f in csv_files:
         vth = f.replace("Vth-", "")
         vth = vth.replace("_batchAcc_per_time.csv", "")
-        if vth == "Dynamic":
-            all_acc_x.append(-1)
-        else:
-            all_acc_x.append(float(vth))
+        # alpha = float(vth.replace("Dynamic_alpha-", ""))
 
         with open(os.path.join(args.csvDir, f)) as rf:
             reader = csv.reader(rf)
@@ -108,14 +106,64 @@ def EachTime(args):
         x = np.arange(timestep+1)
         y = np.pad(acc_batch_step, ((1, 0)))
         ax1.plot(x, y, label="{}".format(vth))
-        all_acc_y.append(y[-1])
+
+        if is_num(vth):
+            const_vth = f.replace("Vth-", "")
+            const_vth = float(const_vth.replace("_batchAcc_per_time.csv", ""))
+            Vth_y = np.full_like(x, const_vth)
+            ax2.plot(x, Vth_y, label="{}".format(vth))
+
+    for f in vth_files:
+        vth = f.replace("Vth-", "")
+        vth = vth.replace("_Vth_per_time.csv", "")
+
+        with open(os.path.join(args.csvDir, f)) as rf:
+            reader = csv.reader(rf)
+            rows = [list(map(float, row)) for row in reader]
+
+        Vthnp = np.array(rows)
+        Vth_y = np.mean(rows, axis=0)
+        if "Dynamic" in f:
+            ax2.plot(x, Vth_y, label="{}".format(vth))
+            ax2.set_xlim([0, 100])
+        elif "Adaptive" in f:
+            ax2.plot(x, Vth_y, label="{}".format(vth))
+        else:
+            raise ValueError
     
     ax1.legend()
-    ax2.scatter(all_acc_x, all_acc_y)
+    ax2.legend()
     savefile = os.path.join(args.csvDir, "Acc_TimeStep_Plot.png")
     fig.savefig(savefile, dpi=150)
+
+def FireTime(args):
+    all_files = os.listdir(args.csvDir)
+    csv_files = [f for f in all_files if "Firecount_per_time.csv" in f]
+    file_num = len(csv_files)
+    csv_files.sort()
+
+    cm = plt.cm.get_cmap("tab20")
+    fig = plt.figure(figsize=(12, 8))
+    ax1 = fig.add_subplot(111)
+    
+    for f in csv_files:
+        with open(os.path.join(args.csvDir, f)) as rf:
+            reader = csv.reader(rf)
+            rows = [list(map(float, row)) for row in reader]
+            rows = np.array(rows)
+
+        layer_num = rows.shape[1] - 1
+        for l in range(layer_num):
+            ax1.scatter(rows[:,0], rows[:,l+1]/(rows[:,0]+1), label="{}-Layer".format(l+1), color=cm(l))
+        
+        ax1.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+        plt.tight_layout()
+        savefile = os.path.join(args.csvDir, "{}_FireCount_TimeStep_Plot.png".format(f.replace("_Firecount_per_time.csv", "")))
+        fig.savefig(savefile, dpi=150)
 
 if __name__ == "__main__":
     args = parser.parse_args()
     EachImage(args=args)
     EachTime(args=args)
+    if args.Fire == 1:
+        FireTime(args=args)

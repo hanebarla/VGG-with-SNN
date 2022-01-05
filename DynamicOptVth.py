@@ -8,12 +8,13 @@ from torchvision.datasets import CIFAR10
 import torchvision.transforms as transforms
 from model import SpikingConv2d, SpikingVGG16, Vgg16, Vgg16_BN
 from utils import SpikeEncodeDatasets, date2foldername, saveCSVrow, saveCSVrows
+from ThresholdModel import ExponentialModel
 
 
 parser = argparse.ArgumentParser(description='PyTorch Spiking Test')
-parser.add_argument('--batchsize', default=512, type=int)
+parser.add_argument('--batchsize', default=256, type=int)
 parser.add_argument('--scale', default=1.0, type=float)
-parser.add_argument('--Vth', default=0.5, type=float)
+parser.add_argument('--Vth', default=0.0, type=float)
 parser.add_argument('--Vres', default=0.0, type=float)
 parser.add_argument('--activate', default="leaky")
 parser.add_argument('--debug_layer', default=1, type=int)
@@ -24,29 +25,21 @@ parser.add_argument('--load_normalized_weight', default=None)
 parser.add_argument('--savefolder', default="SNN_Test_Results/")
 parser.add_argument('--changeStep', default=100, type=int)
 parser.add_argument('--logging', default=1, type=int, help="if we want to save csv data per image")  # bool
+parser.add_argument('--alpha', default=1.0, type=float, help="Vth's exponential model")
+parser.add_argument('--beta', default=1.0, type=float)
+parser.add_argument('--change_alpha', default=0, type=int, help="Explement condition one alpha or some alpha")  # bool
 
 
 # Calculate lambda(max activations), and channel-wise Normalize
 def CW_Normalize(args, model, trainset, device):
-    dleng = len(trainset)
-    acc = 0
     trainloader = torch.utils.data.DataLoader(trainset, batch_size=args.batchsize)
+    dataForNormalize = next(iter(trainloader))
+    with torch.no_grad():
+        inputs, labels = dataForNormalize
+        inputs = inputs.to(device)
+        outputs = model.calculate_lambda(inputs)
 
-    for data in trainloader:
-        with torch.no_grad():
-            inputs, labels = data
-            inputs = inputs.to(device)
-            labels = labels.to(device)
-            outputs = model.calculate_lambda(inputs)
-
-            output_argmax = torch.argmax(outputs, dim=1)
-
-        acc_tensor = torch.zeros_like(labels)
-        acc_tensor[output_argmax==labels] = 1
-        acc += acc_tensor.sum().item()
-
-    acc /= dleng
-    print("ANN Train Acc: {}".format(acc)) # Check the accuracy in Trainset with ANN
+    print("Normalizing Model ...")
     model.channel_wised_normlization()
     print("=> Model Normalize Success")
 
@@ -54,10 +47,12 @@ def CW_Normalize(args, model, trainset, device):
 
 
 def spike_test(args, trainset, testset,  spikeset, device):
+    VthFunc = ExponentialModel(args.alpha, args.beta)
     # logging set up
     if args.logging == 1:
-        savecsv = os.path.join(args.savefolder, "Vth-Dynamic_result_per_image.csv")
-        accTimestepCSV = os.path.join(args.savefolder, "Vth-Dynamic_batchAcc_per_time.csv")
+        savecsv = os.path.join(args.savefolder, "Vth-Dynamic_alpha-{}_result_per_image.csv".format(args.alpha))
+        accTimestepCSV = os.path.join(args.savefolder, "Vth-Dynamic_alpha-{}_batchAcc_per_time.csv".format(args.alpha))
+        vthTimestepCSV = os.path.join(args.savefolder, "Vth-Dynamic_alpha-{}_Vth_per_time.csv".format(args.alpha))
         saveCSVrow(["Vth","index","spike_argmax","label","acc"], savecsv)
 
     # Load Mmodels
@@ -140,7 +135,7 @@ def spike_test(args, trainset, testset,  spikeset, device):
 
     # SNN Initialize
     inp = torch.ones(1, 3, 32, 32)  # To get neauron size, so simulate as a scalemodel
-    model = SpikingVGG16(stdict, block1, block2, bn1, bn2, classifier, inp, device, Vth=args.Vth, Vres=args.Vres)
+    model = SpikingVGG16(stdict, block1, block2, bn1, bn2, classifier, inp, device, Vth=args.Vth, Vres=args.Vres, activate=args.activate)
     if args.load_normalized_weight is None:
         model.to(device)
         model = CW_Normalize(args, model, trainset, device)
@@ -169,6 +164,7 @@ def spike_test(args, trainset, testset,  spikeset, device):
         print("{} start. Voltage reseted".format(i))
         Vth = args.Vth
 
+        vth_timestep = [Vth]
         # time step proccess
         for j in range(args.timelength):
             spike = sp[0][:, j, :, :, :]
@@ -186,9 +182,9 @@ def spike_test(args, trainset, testset,  spikeset, device):
                 Acc_step_per_batch.append(acc_tensor.sum().item())
 
             if (j + 1) % args.changeStep == 0:
-                Vth += 0.1
+                Vth = VthFunc(j+1, Vth)
                 model.changeVth(Vth)
-                print("{} batch: changed vth to {}".format(i, Vth))
+            vth_timestep.append(Vth)
 
         model.FireCount(timestep=args.timelength)
 
@@ -208,6 +204,7 @@ def spike_test(args, trainset, testset,  spikeset, device):
             saveinfo = np.concatenate([vth_list, indecies, spikecount_argmax_info, labels_info, acc_tensor_info], -1)
             saveCSVrows(saveinfo.tolist(), savecsv)
             saveCSVrow(Acc_step_per_batch, accTimestepCSV)
+            saveCSVrow(vth_timestep, vthTimestepCSV)
 
         acc += acc_tensor.sum().item()
 
@@ -235,8 +232,14 @@ def main():
         args.savefolder = os.path.join(args.savefolder, date2foldername())
         os.makedirs(args.savefolder, exist_ok=True)
 
-    spike_test(args, trainset, testset, Spikes, device)
-
+    if args.change_alpha == 0:
+        spike_test(args, trainset, testset, Spikes, device)
+    if args.change_alpha == 1:
+        alphaCond = [1.0, 0.9, 0.8, 0.7]
+        for al in alphaCond:
+            print("========== Alpha: {} ==========".format(al))
+            args.alpha = al
+            spike_test(args, trainset, testset, Spikes, device)
 
 
 if __name__ == "__main__":
