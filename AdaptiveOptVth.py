@@ -183,8 +183,8 @@ def spike_test(args, trainset, testset,  spikeset, device):
                 acc_tensor = torch.zeros_like(labels)
                 acc_tensor[spikecount_argmax==labels] = 1
                 Acc_step_per_batch.append(acc_tensor.sum().item())
-                fire_cnt = model.SaveFireCount(fireTimestepCSV, j)
-            VthFunc.firelog(fire_cnt)
+                model_count, overfire, whole_fire_cnt = model.SaveFireCount(fireTimestepCSV, j)
+            VthFunc.firelog([model_count, overfire])
 
             if (j + 1) % args.changeStep == 0:
                 Vth = VthFunc(j+1, Vth)

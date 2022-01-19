@@ -630,12 +630,14 @@ class SpikingVGG16(nn.Module):
     def SaveFireCount(self, csvfile, timestep):
         model_count = 0
         first_cnt = 0
+        whole_fire_cnt = 0
         overfire = 0
         apply_instance = (SpikingConv2d, SpikingLinear)
         row = [timestep]
         for m in self.modules():
             if isinstance(m, apply_instance):
                 layer_cnt = torch.mean(m.firecout).item()
+                whole_fire_cnt += torch.sum(m.firecout).item()
                 if first_cnt == 0:
                     first_cnt = layer_cnt
                 if layer_cnt > first_cnt:
@@ -647,7 +649,7 @@ class SpikingVGG16(nn.Module):
             writer = csv.writer(f)
             writer.writerow(row)
 
-        return model_count, overfire
+        return model_count, overfire, whole_fire_cnt
 
     def forward(self, x):
         x = self.block(x)

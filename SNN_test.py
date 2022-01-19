@@ -25,6 +25,7 @@ parser.add_argument('--load_normalized_weight', default=None, help="SNN trained 
 parser.add_argument('--savefolder', default="SNN_Test_Results/", help="Experiment or Debug layer Save path")
 parser.add_argument('--change_Vth', default=0, type=int, help="Explement condition one Vth or some Vth's")  # bool
 parser.add_argument('--logging', default=1, type=int, help="if we want to save csv data per image")  # bool
+parser.add_argument('--burnin', default=0, type=int)
 
 
 # Calculate lambda(max activations), and channel-wise Normalize
@@ -93,6 +94,9 @@ def spike_test(args, trainset, testset,  spikeset, device):
         savecsv = os.path.join(args.savefolder, "Vth-{}_result_per_image.csv".format(args.Vth))
         accTimestepCSV = os.path.join(args.savefolder, "Vth-{}_batchAcc_per_time.csv".format(args.Vth))
         fireTimestepCSV = os.path.join(args.savefolder, "Vth-{}_Firecount_per_time.csv".format(args.Vth))
+        energyTimestepCSV = os.path.join(args.savefolder, "Vth-{}_Energy_per_time.csv".format(args.Vth))
+        if args.burnin > 0:
+            burnintimestepCSV = os.path.join(args.savefolder, "Vth-{}_burnin-{}_batchAcc_per_time.csv".format(args.Vth, args.burnin))
         saveCSVrow(["Vth","index","spike_argmax","label","acc"], savecsv)
 
     # Data load
@@ -262,6 +266,8 @@ def spike_test(args, trainset, testset,  spikeset, device):
         test_data = data[0]
         sp = data[1]
         Acc_step_per_batch = []
+        Bunrin_Acc_step_per_batch = []
+        Energy = []
 
         # ANN Test
         if args.debug_layer != 0:
@@ -281,7 +287,8 @@ def spike_test(args, trainset, testset,  spikeset, device):
         print(model.block[0].lambda_after)
         """
         
-        outspike = torch.zeros(sp[0].size()[0], args.timelength, 10)
+        outspike = torch.zeros(sp[0].size()[0], args.timelength, 10) # 10: cifar10
+        burnin_sum = torch.zeros(sp[0].size()[0], 10)
         labels = sp[1]
         model.reset(sp[0].size()[0])  # batch size to argument
         print("{} start. Voltage reseted".format(i))
@@ -293,6 +300,11 @@ def spike_test(args, trainset, testset,  spikeset, device):
             with torch.no_grad():
                 out = model(spike)
             outspike[:, j, :] = out
+
+            if (j+1) == args.burnin:
+                burnin_sum = torch.sum(outspike, axis=1)
+
+            fire_cnt = model.SaveFireCount(fireTimestepCSV, j)
             
             # log acc per step
             if args.logging == 1:
@@ -301,7 +313,16 @@ def spike_test(args, trainset, testset,  spikeset, device):
                 acc_tensor = torch.zeros_like(labels)
                 acc_tensor[spikecount_argmax==labels] = 1
                 Acc_step_per_batch.append(acc_tensor.sum().item())
-                fire = model.SaveFireCount(fireTimestepCSV, j)
+
+                model_count, overfire, whole_fire_cnt = model.SaveFireCount(fireTimestepCSV, j)
+                Energy.append(whole_fire_cnt)
+
+                if args.burnin > 0 and (j+1) >= args.burnin:
+                    bunin_spikecount = spikecount - burnin_sum
+                    _, burnin_spikecount_argmax = torch.max(bunin_spikecount, dim=1)
+                    acc_tensor = torch.zeros_like(labels)
+                    acc_tensor[burnin_spikecount_argmax==labels] = 1
+                    Bunrin_Acc_step_per_batch.append(acc_tensor.sum().item())
 
         model.FireCount(timestep=args.timelength)
         if args.debug_layer != 0:
@@ -327,6 +348,8 @@ def spike_test(args, trainset, testset,  spikeset, device):
             saveinfo = np.concatenate([vth_list, indecies, spikecount_argmax_info, labels_info, acc_tensor_info], -1)
             saveCSVrows(saveinfo.tolist(), savecsv)
             saveCSVrow(Acc_step_per_batch, accTimestepCSV)
+            saveCSVrow(Bunrin_Acc_step_per_batch, burnintimestepCSV)
+            saveCSVrow(Energy, energyTimestepCSV)
 
         acc += acc_tensor.sum().item()
 

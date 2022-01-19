@@ -12,6 +12,24 @@ class ExponentialModel():
         y = 1 - math.exp(-1 * self.alpha * time)
         return self.beta * y
 
+class ReverseExponentialModel():
+    def __init__(self, alpha=1.0, beta=1.0) -> None:
+        self.alpha = alpha
+        self.beta = beta
+
+    def __call__(self, time, Vth):
+        y = math.exp(-1 * self.alpha * time)
+        return self.beta * y
+
+class OverExponentialModel():
+    def __init__(self, alpha=1.0, beta=10.0) -> None:
+        self.alpha = alpha
+        self.beta = beta
+
+    def __call__(self, time, Vth):
+        y = math.exp(-1 * self.alpha * time)
+        return self.beta * y + 1.0
+
 class AdaptiveModel():
     def __init__(self, chagestep) -> None:
         self.acc_history = []

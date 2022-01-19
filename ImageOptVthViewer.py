@@ -1,4 +1,6 @@
 import argparse
+import atexit
+from cProfile import label
 import csv
 import os
 import matplotlib.pyplot as plt
@@ -7,6 +9,7 @@ from utils import is_num
 
 
 DLEN = 0
+BURNIN = 0
 
 parser = argparse.ArgumentParser(description='csv analystic')
 parser.add_argument('--csvDir', default=None)
@@ -79,6 +82,7 @@ def EachImage(args):
     savefile = os.path.join(args.csvDir, "Acc_Analay_Plot.png")
     fig.savefig(savefile, dpi=150)
 
+
 def EachTime(args):
     all_files = os.listdir(args.csvDir)
     csv_files = [f for f in all_files if "batchAcc_per_time.csv" in f]
@@ -103,9 +107,19 @@ def EachTime(args):
         acc_batch_step = np.array(rows)
         timestep = acc_batch_step.shape[1]
         acc_batch_step = np.sum(acc_batch_step, axis=0) / DLEN
+        print(f)
+        if "burnin" in f:
+            idx = vth.find("burnin-")
+            bunrin_time = int(vth[idx+7:])
+            global BURNIN
+            BURNIN = bunrin_time
+            timestep += bunrin_time-1
+            y = np.pad(acc_batch_step, (bunrin_time, 0))
+        else:
+            y = np.pad(acc_batch_step, ((1, 0)))
         x = np.arange(timestep+1)
-        y = np.pad(acc_batch_step, ((1, 0)))
         ax1.plot(x, y, label="{}".format(vth))
+        print("{}: {}".format(vth, y[-1]))
 
         if is_num(vth):
             const_vth = f.replace("Vth-", "")
@@ -114,6 +128,9 @@ def EachTime(args):
             ax2.plot(x, Vth_y, label="{}".format(vth))
 
     for f in vth_files:
+        if "burnin" in f:
+            break
+
         vth = f.replace("Vth-", "")
         vth = vth.replace("_Vth_per_time.csv", "")
 
@@ -125,7 +142,7 @@ def EachTime(args):
         Vth_y = np.mean(rows, axis=0)
         if "Dynamic" in f:
             ax2.plot(x, Vth_y, label="{}".format(vth))
-            ax2.set_xlim([0, 100])
+            # ax2.set_xlim([0, 100])
         elif "Adaptive" in f:
             ax2.plot(x, Vth_y, label="{}".format(vth))
         else:
@@ -161,9 +178,63 @@ def FireTime(args):
         savefile = os.path.join(args.csvDir, "{}_FireCount_TimeStep_Plot.png".format(f.replace("_Firecount_per_time.csv", "")))
         fig.savefig(savefile, dpi=150)
 
+def Energy(args):
+    all_files = os.listdir(args.csvDir)
+    csv_files = [f for f in all_files if "Energy_per_time.csv" in f]
+    csv_files.sort()
+
+    fig = plt.figure(figsize=(6, 8))
+    ax1 = fig.add_subplot(211)
+    ax2 = fig.add_subplot(212)
+
+    for f in csv_files:
+        if "burnn" in f:
+            continue
+        with open(os.path.join(args.csvDir, f)) as rf:
+            reader = csv.reader(rf)
+            rows = [list(map(float, row)) for row in reader]
+            rows = np.array(rows)
+            rows = np.pad(rows, ((0, 0), (1, 0)))
+        timestep = rows.shape[1]
+        rows *= 1e-12
+        x = np.arange(timestep)
+
+        vth_in_file = f.replace("_Energy_per_time.csv", "")
+        vth_in_file = vth_in_file.replace("Vth-", "")
+        if is_num(vth_in_file):
+            rows /= float(vth_in_file)
+        else:
+            with open(os.path.join(args.csvDir, f.replace("Energy", "Vth"))) as rf:
+                reader = csv.reader(rf)
+                Vth_rows = [list(map(float, row)) for row in reader]
+                Vth_rows = np.array(Vth_rows)
+                rows /= Vth_rows
+        rows = np.sum(rows, axis=0)
+        rows = np.cumsum(rows)
+        ax1.scatter(x, rows, label="{}".format(str(f).replace("_Energy_per_time.csv", "")))
+
+        with open(os.path.join(args.csvDir, str(f).replace("Energy", "batchAcc"))) as rf:
+            reader = csv.reader(rf)
+            acc_rows = [list(map(int, row)) for row in reader]
+        
+        acc_batch_step = np.sum(acc_rows, axis=0) / DLEN
+        acc_batch_step = np.pad(acc_batch_step, ((1,0)))
+        ax2.scatter(rows, acc_batch_step, label="{}".format(str(f).replace("_Energy_per_time.csv", "")))
+
+    ax1.legend()
+    ax1.set_xlabel("Time")
+    ax1.set_ylabel("Energy [T*fire]")
+    ax2.legend()
+    ax2.set_xlabel("Energy [T*fire]")
+    ax2.set_ylabel("Accuracy")
+
+    savefile = os.path.join(args.csvDir, "Energy_Plot.png")
+    fig.savefig(savefile, dpi=150)
+
 if __name__ == "__main__":
     args = parser.parse_args()
     EachImage(args=args)
     EachTime(args=args)
     if args.Fire == 1:
         FireTime(args=args)
+    Energy(args=args)

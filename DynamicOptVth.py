@@ -1,4 +1,5 @@
 import argparse
+from ast import parse
 import os
 import matplotlib.pyplot as plt
 import numpy as np
@@ -8,13 +9,13 @@ from torchvision.datasets import CIFAR10
 import torchvision.transforms as transforms
 from model import SpikingConv2d, SpikingVGG16, Vgg16, Vgg16_BN
 from utils import SpikeEncodeDatasets, date2foldername, saveCSVrow, saveCSVrows
-from ThresholdModel import ExponentialModel
+from ThresholdModel import ExponentialModel, ReverseExponentialModel
 
 
 parser = argparse.ArgumentParser(description='PyTorch Spiking Test')
 parser.add_argument('--batchsize', default=256, type=int)
 parser.add_argument('--scale', default=1.0, type=float)
-parser.add_argument('--Vth', default=0.0, type=float)
+parser.add_argument('--Vth', default=1.0, type=float)
 parser.add_argument('--Vres', default=0.0, type=float)
 parser.add_argument('--activate', default="leaky")
 parser.add_argument('--debug_layer', default=1, type=int)
@@ -23,11 +24,13 @@ parser.add_argument('--bn', default=0, type=int)
 parser.add_argument('--load_weight', default=None, help="ANN trained model file path")
 parser.add_argument('--load_normalized_weight', default=None)
 parser.add_argument('--savefolder', default="SNN_Test_Results/")
-parser.add_argument('--changeStep', default=100, type=int)
+parser.add_argument('--changeStep', default=1, type=int)
 parser.add_argument('--logging', default=1, type=int, help="if we want to save csv data per image")  # bool
 parser.add_argument('--alpha', default=1.0, type=float, help="Vth's exponential model")
 parser.add_argument('--beta', default=1.0, type=float)
 parser.add_argument('--change_alpha', default=0, type=int, help="Explement condition one alpha or some alpha")  # bool
+parser.add_argument('--burnin', default=0, type=int)
+parser.add_argument('--reverse', default=0, type=int)
 
 
 # Calculate lambda(max activations), and channel-wise Normalize
@@ -47,12 +50,19 @@ def CW_Normalize(args, model, trainset, device):
 
 
 def spike_test(args, trainset, testset,  spikeset, device):
-    VthFunc = ExponentialModel(args.alpha, args.beta)
+    if args.reverse == 0:
+        VthFunc = ExponentialModel(args.alpha, args.beta)
+    else:
+        VthFunc = ReverseExponentialModel(args.alpha, args.beta)
     # logging set up
     if args.logging == 1:
         savecsv = os.path.join(args.savefolder, "Vth-Dynamic_alpha-{}_result_per_image.csv".format(args.alpha))
         accTimestepCSV = os.path.join(args.savefolder, "Vth-Dynamic_alpha-{}_batchAcc_per_time.csv".format(args.alpha))
         vthTimestepCSV = os.path.join(args.savefolder, "Vth-Dynamic_alpha-{}_Vth_per_time.csv".format(args.alpha))
+        fireTimestepCSV = os.path.join(args.savefolder, "Vth-Dynamic_alpha-{}_Firecount_per_time.csv".format(args.alpha))
+        energyTimestepCSV = os.path.join(args.savefolder, "Vth-Dynamic_alpha-{}_Energy_per_time.csv".format(args.alpha))
+        if args.burnin > 0:
+            burnintimestepCSV = os.path.join(args.savefolder, "Vth-Dynamic_alpha-{}_burnin-{}_batchAcc_per_time.csv".format(args.alpha, args.burnin))
         saveCSVrow(["Vth","index","spike_argmax","label","acc"], savecsv)
 
     # Load Mmodels
@@ -157,8 +167,11 @@ def spike_test(args, trainset, testset,  spikeset, device):
         test_data = data[0]
         sp = data[1]
         Acc_step_per_batch = []
+        Bunrin_Acc_step_per_batch = []
+        Energy = []
 
-        outspike = torch.zeros(sp[0].size()[0], args.timelength, 10)
+        outspike = torch.zeros(sp[0].size()[0], args.timelength, 10)  # 10: cifar10
+        burnin_sum = torch.zeros(sp[0].size()[0], 10)
         labels = sp[1]
         model.reset(sp[0].size()[0])  # batch size to argument
         print("{} start. Voltage reseted".format(i))
@@ -173,6 +186,9 @@ def spike_test(args, trainset, testset,  spikeset, device):
                 out = model(spike)
             outspike[:, j, :] = out
 
+            if (j+1) == args.burnin:
+                burnin_sum = torch.sum(outspike, axis=1)
+
             # log acc per step
             if args.logging == 1:
                 spikecount = torch.sum(outspike, axis=1)
@@ -180,6 +196,16 @@ def spike_test(args, trainset, testset,  spikeset, device):
                 acc_tensor = torch.zeros_like(labels)
                 acc_tensor[spikecount_argmax==labels] = 1
                 Acc_step_per_batch.append(acc_tensor.sum().item())
+
+                model_count, overfire, whole_fire_cnt = model.SaveFireCount(fireTimestepCSV, j)
+                Energy.append(whole_fire_cnt)
+
+                if args.burnin > 0 and (j+1) >= args.burnin:
+                    bunin_spikecount = spikecount - burnin_sum
+                    _, burnin_spikecount_argmax = torch.max(bunin_spikecount, dim=1)
+                    acc_tensor = torch.zeros_like(labels)
+                    acc_tensor[burnin_spikecount_argmax==labels] = 1
+                    Bunrin_Acc_step_per_batch.append(acc_tensor.sum().item())
 
             if (j + 1) % args.changeStep == 0:
                 Vth = VthFunc(j+1, Vth)
@@ -205,6 +231,8 @@ def spike_test(args, trainset, testset,  spikeset, device):
             saveCSVrows(saveinfo.tolist(), savecsv)
             saveCSVrow(Acc_step_per_batch, accTimestepCSV)
             saveCSVrow(vth_timestep, vthTimestepCSV)
+            saveCSVrow(Bunrin_Acc_step_per_batch, burnintimestepCSV)
+            saveCSVrow(Energy, energyTimestepCSV)
 
         acc += acc_tensor.sum().item()
 
@@ -235,7 +263,7 @@ def main():
     if args.change_alpha == 0:
         spike_test(args, trainset, testset, Spikes, device)
     if args.change_alpha == 1:
-        alphaCond = [1.0, 0.9, 0.8, 0.7]
+        alphaCond = [0.1, 0.01, 0.001]
         for al in alphaCond:
             print("========== Alpha: {} ==========".format(al))
             args.alpha = al
