@@ -1,6 +1,4 @@
 import argparse
-import atexit
-from cProfile import label
 import csv
 import os
 import matplotlib.pyplot as plt
@@ -211,7 +209,7 @@ def Energy(args):
                 rows /= Vth_rows
         rows = np.sum(rows, axis=0)
         rows = np.cumsum(rows)
-        ax1.scatter(x, rows, label="{}".format(str(f).replace("_Energy_per_time.csv", "")))
+        ax1.scatter(x, rows, label="{}".format(str(f).replace("_Energy_per_time.csv", "")), s=0.1)
 
         with open(os.path.join(args.csvDir, str(f).replace("Energy", "batchAcc"))) as rf:
             reader = csv.reader(rf)
@@ -219,7 +217,7 @@ def Energy(args):
         
         acc_batch_step = np.sum(acc_rows, axis=0) / DLEN
         acc_batch_step = np.pad(acc_batch_step, ((1,0)))
-        ax2.scatter(rows, acc_batch_step, label="{}".format(str(f).replace("_Energy_per_time.csv", "")))
+        ax2.scatter(rows, acc_batch_step, label="{}".format(str(f).replace("_Energy_per_time.csv", "")), s=0.1)
 
     ax1.legend()
     ax1.set_xlabel("Time")

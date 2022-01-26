@@ -15,10 +15,10 @@ parser.add_argument('--batchsize', default=128, type=int, help="specify bachsize
 parser.add_argument('--scale', default=1.0, type=float, help="To change weight for fire corresponding to Vth")
 parser.add_argument('--Vth', default=1.0, type=float, help="spike threshold")
 parser.add_argument('--Vres', default=0.0, type=float, help="membren voltage when reset")
-parser.add_argument('--activate', default="leaky", help="Specify activate function")
+parser.add_argument('--activate', default="relu", help="Specify activate function")
 parser.add_argument('--debug_layer', default=0, type=int, help="Specify to view debug layer")
 parser.add_argument('--timelength', default=100, type=int, help="Specify time length")
-parser.add_argument('--bn', default=0, type=int, help="Activate Batch Norm layer")
+parser.add_argument('--bn', default=1, type=int, help="Activate Batch Norm layer")
 parser.add_argument('--percentile', default=0.999, type=float, help="Spcify normalize percentile")
 parser.add_argument('--load_weight', default=None, help="ANN trained model file path")
 parser.add_argument('--load_normalized_weight', default=None, help="SNN trained model normalized from ANN model")
@@ -303,8 +303,6 @@ def spike_test(args, trainset, testset,  spikeset, device):
 
             if (j+1) == args.burnin:
                 burnin_sum = torch.sum(outspike, axis=1)
-
-            fire_cnt = model.SaveFireCount(fireTimestepCSV, j)
             
             # log acc per step
             if args.logging == 1:

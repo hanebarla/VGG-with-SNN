@@ -288,6 +288,7 @@ class SpikingLinear(nn.Module):
         self.n += self.linear(x)
 
         spike = torch.zeros_like(self.n)
+        # print("Membrem {}".format(torch.quantile(self.n, 0.99).item()))
         spike[self.n > self.Vth] = self.peak
         if self.alpha > 1e-6:
             spike[self.n < self.n_Vth] = -self.peak
@@ -665,7 +666,7 @@ class SpikingVGG16(nn.Module):
                 m.scale = 1.0 * Vth
                 m.Vth = Vth
                 m.n_Vth = -Vth / m.alpha
-                self.outscale = 1.0 * Vth
+        self.outscale = 1.0 * Vth
 
 
 if __name__ == "__main__":
