@@ -5,9 +5,18 @@ import matplotlib.pyplot as plt
 import numpy as np
 from utils import is_num
 
+plt.rc('text', usetex=True)
+plt.rc('font', family='serif')
+plt.rcParams["font.size"] = 14
 
 DLEN = 0
 BURNIN = 0
+BASEACC = 0
+BASEACCBURNIN = 0
+# viewACCMAX = 0.63
+# viewACCMIN = -0.03
+viewACCMAX = 0.73
+viewACCMIN = 0.5
 
 parser = argparse.ArgumentParser(description='csv analystic')
 parser.add_argument('--csvDir', default=None)
@@ -75,13 +84,18 @@ def EachImage(args):
     # Accurate plot per image
     ax1.scatter(PerImage_x, PerImage_y, s=0.5)
     ax2.set_xticks(class_idx)
-    ax2.legend()
+    ax2.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    fig.tight_layout()
 
-    savefile = os.path.join(args.csvDir, "Acc_Analay_Plot.png")
-    fig.savefig(savefile, dpi=150)
+    plt.rcParams["svg.fonttype"] = "none"
+
+    savefile = os.path.join(args.csvDir, "Acc_Analay_Plot.svg")
+    fig.savefig(savefile)
 
 
 def EachTime(args):
+    global BASEACC
+    global BASEACCBURNIN
     all_files = os.listdir(args.csvDir)
     csv_files = [f for f in all_files if "batchAcc_per_time.csv" in f]
     vth_files = [f for f in all_files if "Vth_per_time.csv" in f]
@@ -89,11 +103,15 @@ def EachTime(args):
     file_num = len(csv_files)
     csv_files.sort()
 
-    fig = plt.figure(figsize=(6, 8))
+    fig = plt.figure(figsize=(11, 13))
     ax1 = fig.add_subplot(211)
     ax2 = fig.add_subplot(212)
 
+    accTimeX = []
+    accTimeY = []
+
     for f in csv_files:
+        cross_point = 0
         vth = f.replace("Vth-", "")
         vth = vth.replace("_batchAcc_per_time.csv", "")
         # alpha = float(vth.replace("Dynamic_alpha-", ""))
@@ -115,14 +133,32 @@ def EachTime(args):
         else:
             y = np.pad(acc_batch_step, ((1, 0)))
         x = np.arange(timestep+1)
-        ax1.plot(x, y, label="{}".format(vth))
+        labelname = file2label(str(vth))
+        ax1.plot(x, y, label="{}".format(labelname))
         print("{}: {}".format(vth, y[-1]))
+
+        if "1.0" == str(vth):
+            BASEACC = y[-1]
+            ax1.axhline(BASEACC, linestyle="dashed", color='#1f77b4')
+        elif "1.0_burnin-300" == str(vth):
+            BASEACCBURNIN = y[-1]
+            ax1.axhline(BASEACCBURNIN, linestyle="dotted", color='g')
+        else:
+            if "burnin" in f:
+                timesteps = np.where(y>=BASEACCBURNIN)
+                if len(timesteps[0]) != 0:
+                    ax1.axvline(timesteps[0][0], ymax=((BASEACCBURNIN-viewACCMIN)/(viewACCMAX-viewACCMIN)), linestyle="dotted", c='g')
+            else:
+                timesteps = np.where(y>=BASEACC)
+                if len(timesteps[0]) != 0:
+                    ax1.axvline(timesteps[0][0], ymax=((BASEACC-viewACCMIN)/(viewACCMAX-viewACCMIN)), linestyle="dashed", color='#1f77b4')
 
         if is_num(vth):
             const_vth = f.replace("Vth-", "")
             const_vth = float(const_vth.replace("_batchAcc_per_time.csv", ""))
             Vth_y = np.full_like(x, const_vth)
-            ax2.plot(x, Vth_y, label="{}".format(vth))
+            labelname = file2label(str(vth))
+            ax2.plot(x, Vth_y, label="{}".format(labelname))
 
     for f in vth_files:
         if "burnin" in f:
@@ -138,22 +174,32 @@ def EachTime(args):
         Vthnp = np.array(rows)
         Vth_y = np.mean(rows, axis=0)
         if "Dynamic" in f:
-            ax2.plot(x, Vth_y, label="{}".format(vth))
+            labelname = file2label(str(vth))
+            Vth_y[0] = 2
+            ax2.plot(x, Vth_y, label="{}".format(labelname))
             # ax2.set_xlim([0, 100])
         elif "Adaptive" in f:
-            ax2.plot(x, Vth_y, label="{}".format(vth))
+            labelname = file2label(str(vth))
+            ax2.plot(x, Vth_y, label="{}".format(labelname))
         else:
             raise ValueError
     
-    ax1.legend()
+    ax1.legend(bbox_to_anchor=(0.5, 1.02), loc='lower center', ncol=2)
     ax1.set_xlabel("TimeStep")
     ax1.set_ylabel("Accuracy")
-    ax2.legend()
+    ax1.set_title("(a)", y=-0.2)
+    ax2.legend(bbox_to_anchor=(0.5, 1.02), loc='lower center')
     ax2.set_xlabel("TimeStep")
     ax2.set_ylabel("Vth")
+    #ax2.set_title("(b)", y=-0.2)
+    ax1.set_xlim(300, 1030)
+    ax1.set_ylim(viewACCMIN, viewACCMAX)
+    fig.tight_layout()
 
-    savefile = os.path.join(args.csvDir, "Acc_TimeStep_Plot.png")
-    fig.savefig(savefile, dpi=300)
+    plt.rcParams["svg.fonttype"] = "none"
+
+    savefile = os.path.join(args.csvDir, "Acc_TimeStep_Plot.svg")
+    fig.savefig(savefile)
 
 def FireTime(args):
     all_files = os.listdir(args.csvDir)
@@ -164,7 +210,7 @@ def FireTime(args):
     cm = plt.cm.get_cmap("tab20")
     
     for f in csv_files:
-        fig = plt.figure(figsize=(12, 8))
+        fig = plt.figure(figsize=(6, 5))
         ax1 = fig.add_subplot(111)
         with open(os.path.join(args.csvDir, f)) as rf:
             reader = csv.reader(rf)
@@ -177,7 +223,7 @@ def FireTime(args):
         
         ax1.set_xlabel("TimeStep")
         ax1.set_ylabel("Average fire rate")
-        ax1.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+        ax1.legend(bbox_to_anchor=(0.5, 1.02), loc='lower center', ncol=4)
         plt.tight_layout()
         savefile = os.path.join(args.csvDir, "{}_FireCount_TimeStep_Plot.png".format(f.replace("_Firecount_per_time.csv", "")))
         fig.savefig(savefile, dpi=600)
@@ -187,14 +233,12 @@ def Energy(args):
     csv_files = [f for f in all_files if "Energy_per_time.csv" in f]
     csv_files.sort()
 
-    fig = plt.figure(figsize=(6, 8))
+    fig = plt.figure(figsize=(11, 9))
     ax1 = fig.add_subplot(211)
     ax2 = fig.add_subplot(212)
 
     for f in csv_files:
         cutf = f.replace("Vth-", "")
-        if "burnn" in f:
-            continue
         with open(os.path.join(args.csvDir, f)) as rf:
             reader = csv.reader(rf)
             rows = [list(map(float, row)) for row in reader]
@@ -216,25 +260,62 @@ def Energy(args):
                 rows /= Vth_rows
         rows = np.sum(rows, axis=0)
         rows = np.cumsum(rows)
-        ax1.plot(x, rows, label="{}".format(cutf.replace("_Energy_per_time.csv", "")))
+        labelname = cutf.replace("_Energy_per_time.csv", "")
+        labelname = file2label(labelname)
+        ax1.plot(x, rows, label="{}".format(labelname))
 
         with open(os.path.join(args.csvDir, str(f).replace("Energy", "batchAcc"))) as rf:
             reader = csv.reader(rf)
             acc_rows = [list(map(int, row)) for row in reader]
-        
-        acc_batch_step = np.sum(acc_rows, axis=0) / DLEN
-        acc_batch_step = np.pad(acc_batch_step, ((1,0)))
-        ax2.plot(rows, acc_batch_step, label="{}".format(cutf.replace("_Energy_per_time.csv", "")))
 
-    ax1.legend()
+            acc_batch_step = np.sum(acc_rows, axis=0) / DLEN
+            acc_batch_step = np.pad(acc_batch_step, ((1,0)))
+            labelname = cutf.replace("_Energy_per_time.csv", "")
+            labelname = file2label(labelname)
+            ax2.plot(rows, acc_batch_step, label="{}".format(labelname))
+            timesteps = np.where(acc_batch_step>=BASEACC)
+            if len(timesteps[0]) != 0 and ("Vth-1.0" not in f):
+                ax2.axvline(rows[timesteps[0][0]], ymax=((BASEACC-viewACCMIN)/(viewACCMAX-viewACCMIN)), linestyle="dashed", color='#1f77b4')
+
+        with open(os.path.join(args.csvDir, str(f).replace("Energy", "burnin-300_batchAcc"))) as rf:
+            reader = csv.reader(rf)
+            burnin_acc_rows = [list(map(int, row)) for row in reader]
+            burnin_acc_batch_step = np.sum(burnin_acc_rows, axis=0) / DLEN
+            labelname = cutf.replace("_Energy_per_time.csv", "") + "_burnin-300"
+            labelname = file2label(labelname)
+            ax2.plot(rows[300:], burnin_acc_batch_step, label="{}".format(labelname))
+            timesteps = np.where(burnin_acc_batch_step>=BASEACCBURNIN)
+            if len(timesteps[0]) != 0 and ("Vth-1.0" not in f):
+                ax2.axvline(rows[300+timesteps[0][0]], ymax=((BASEACCBURNIN-viewACCMIN)/(viewACCMAX-viewACCMIN)), linestyle="dotted", c='g')
+        
+        ax2.axhline(BASEACC, linestyle="dashed", color='#1f77b4')
+        ax2.axhline(BASEACCBURNIN, linestyle="dotted", color='g')
+
+    #ax1.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
     ax1.set_xlabel("TimeStep")
     ax1.set_ylabel("Energy [J]")
-    ax2.legend()
+    #ax1.set_title("(a)", y=-0.2)
+    #ax2.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
     ax2.set_xlabel("Energy [J]")
     ax2.set_ylabel("Accuracy")
+    ax2.set_title("(b)", y=-0.3)
+    ax2.set_xlim(10, 98)
+    ax2.set_ylim(viewACCMIN, viewACCMAX)
+    fig.tight_layout()
 
-    savefile = os.path.join(args.csvDir, "Energy_Plot.png")
-    fig.savefig(savefile, dpi=300)
+    plt.rcParams["svg.fonttype"] = "none"
+
+    savefile = os.path.join(args.csvDir, "Energy_Plot.svg")
+    fig.savefig(savefile)
+
+def file2label(labelname):
+    labeln = labelname.replace("_", ", ")
+    labeln = labeln.replace("-", "=")
+    labeln = labeln.replace("alpha", "$\\alpha$")
+    labeln = labeln.replace("beta", "$\\beta$")
+    labeln = labeln.replace("burnin", "burn-in")
+    outlabel = r"{}".format(labeln)
+    return outlabel
 
 if __name__ == "__main__":
     args = parser.parse_args()

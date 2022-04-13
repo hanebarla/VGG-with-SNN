@@ -13,3 +13,4 @@ ann_train.sh
 nohup.out
 progress.txt
 /model
+/.venv

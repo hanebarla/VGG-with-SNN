@@ -217,7 +217,6 @@ def spike_test(args, trainset, testset,  spikeset, device):
     print("Acc: {}".format(acc))
 
 
-
 def main():
     args = parser.parse_args()
 

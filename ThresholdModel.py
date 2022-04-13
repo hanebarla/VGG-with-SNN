@@ -68,7 +68,6 @@ class AdaptiveModel():
         self.changestep = chagestep
 
     def __call__(self, time, Vth):
-        """
         if self.state == 0:
             self.state = 1
             return Vth
@@ -81,8 +80,7 @@ class AdaptiveModel():
 
         self.state = 1
         return Vth - 0.05
-        """
-        return Vth + (self.entropy_history[-1] / 10)
+        #return Vth + (self.entropy_history[-1] / 10)
 
     def firelog(self, fire):
         self.firerate_history.append(fire[0])

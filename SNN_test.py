@@ -381,7 +381,7 @@ def main():
     if args.change_Vth == 0:
         spike_test(args, trainset, testset, Spikes, device)
     elif args.change_Vth == 1:
-        VthCond = [(i+5)/10 for i in range(11)]
+        VthCond = [0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5]
         for vth in VthCond:
             print("========== Vth: {} ==========".format(vth))
             args.Vth = vth

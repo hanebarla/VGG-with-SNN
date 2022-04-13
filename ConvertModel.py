@@ -22,7 +22,6 @@ parser.add_argument('--load_weight', default=None, help="ANN trained model file 
 parser.add_argument('--load_normalized_weight', default=None, help="SNN trained model normalized from ANN model")
 parser.add_argument('--timelength', default=100, type=int, help="Specify time length")
 
-
 # Calculate lambda(max activations), and channel-wise Normalize
 def CW_Normalize(args, model, trainset, device):
     trainloader = torch.utils.data.DataLoader(trainset, batch_size=args.batchsize)

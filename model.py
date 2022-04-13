@@ -1,7 +1,13 @@
 import csv
+
+from scipy.fftpack import diff
 import numpy as np
 import torch
 import torch.nn as nn
+
+
+MINPERCENTILE = 0.99
+MAXPERCENTILE = 0.9999
 
 
 class Vgg16_BN(nn.Module):
@@ -224,6 +230,7 @@ class SpikingLinear(nn.Module):
         self.percentile = percentile
         self.peak = 1.0
         
+        self.differ = None
         self.firecout = None
 
         self.lambda_before = 0
@@ -273,7 +280,11 @@ class SpikingLinear(nn.Module):
         n_tmp = self.linear(x)
         n_tmp = self.activate(n_tmp)
         n_tmp_detach = n_tmp.detach()
+        min_percentile = torch.quantile(n_tmp_detach, MINPERCENTILE)
         n_tmp_detach = torch.quantile(n_tmp_detach, self.percentile)
+        max_percentile = torch.quantile(n_tmp_detach, MAXPERCENTILE)
+        differ = (max_percentile - min_percentile) / (n_tmp_detach + 1e-5)
+        self.differ = [differ]
 
         self.lambda_after = n_tmp_detach
 
@@ -340,6 +351,7 @@ class SpikingConv2d(nn.Module):
         self.peak = 1.0
 
         self.firecout = None
+        self.differ = None
 
         self.input_minus = input_minus
         self.lambda_before = None
@@ -412,9 +424,14 @@ class SpikingConv2d(nn.Module):
         n_tmp_reshaped = n_tmp.detach()
         n_tmp_reshaped = n_tmp_reshaped.permute(1, 0, 2, 3) # size: (batch_size, channel_size, w, h) -> (channel_size, batch_size, w, h)
         n_tmp_reshaped = n_tmp_reshaped.contiguous().view(n_tmp_reshaped.size(0), -1) # size: (channel_size, batch_size, w*h) -> (channel_size, batch_size*w*h)
+        min_percentile = torch.quantile(n_tmp_reshaped, MINPERCENTILE, dim=1)
         n_tmp_reshaped = torch.quantile(n_tmp_reshaped, self.percentile, dim=1) # size: (channel_size, batch_size*w*h) -> (channel_size)
+        max_percentile = torch.quantile(n_tmp_reshaped, MAXPERCENTILE, dim=1)
         # n_tmp_reshaped = n_tmp_reshaped.contiguous().view(-1, n_tmp_reshaped.size(1))
         self.lambda_after = n_tmp_reshaped.detach()
+
+        differ = (max_percentile - min_percentile) / (n_tmp_reshaped + 1e-5)
+        self.differ = differ.to('cpu').tolist()
 
         return n_tmp
 
@@ -580,11 +597,16 @@ class SpikingVGG16(nn.Module):
         return out
 
     def channel_wised_normlization(self):
+        differ = []
         for m in self.modules():
             if isinstance(m, SpikingConv2d):
                 m.channel_wise_normalize()
+                differ.extend(m.differ)
             elif isinstance(m, SpikingLinear):
                 m.maxactivation_normalize()
+                differ.extend(m.differ)
+
+        print("Lambda difference is {} between 99p and 99.99p".format(torch.mean(torch.tensor(differ))))
 
     def _set_neurons(self, x):
         _ = self._manual_forward(x, mode="set_neurons")
