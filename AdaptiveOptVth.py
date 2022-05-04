@@ -1,4 +1,5 @@
 import argparse
+from ast import parse
 import os
 import matplotlib.pyplot as plt
 import numpy as np
@@ -8,7 +9,7 @@ from torchvision.datasets import CIFAR10
 import torchvision.transforms as transforms
 from model import SpikingConv2d, SpikingVGG16, Vgg16, Vgg16_BN
 from utils import SpikeEncodeDatasets, date2foldername, saveCSVrow, saveCSVrows
-from ThresholdModel import AdaptiveModel
+from ThresholdModel import AdaptiveLIFModel
 
 
 parser = argparse.ArgumentParser(description='PyTorch Spiking Test')
@@ -16,15 +17,17 @@ parser.add_argument('--batchsize', default=256, type=int)
 parser.add_argument('--scale', default=1.0, type=float)
 parser.add_argument('--Vth', default=1.0, type=float)
 parser.add_argument('--Vres', default=0.0, type=float)
-parser.add_argument('--activate', default="leaky")
+parser.add_argument('--activate', default="relu")
 parser.add_argument('--debug_layer', default=1, type=int)
 parser.add_argument('--timelength', default=1000, type=int)
-parser.add_argument('--bn', default=0, type=int)
+parser.add_argument('--bn', default=1, type=int)
 parser.add_argument('--load_weight', default=None, help="ANN trained model file path")
 parser.add_argument('--load_normalized_weight', default=None)
 parser.add_argument('--savefolder', default="SNN_Test_Results/")
-parser.add_argument('--changeStep', default=200, type=int)
+parser.add_argument('--changeStep', default=1, type=int)
 parser.add_argument('--logging', default=1, type=int, help="if we want to save csv data per image")  # bool
+parser.add_argument('--tau', default=2.0, type=float, help="time constant of adaptive threshold")
+parser.add_argument('--alpha', default=0.2, type=float, help="increasement constant")
 
 
 # Calculate lambda(max activations), and channel-wise Normalize
@@ -45,13 +48,14 @@ def CW_Normalize(args, model, trainset, device):
 
 def spike_test(args, trainset, testset,  spikeset, device):
     softmax = nn.Softmax(dim=1)
-    VthFunc = AdaptiveModel(chagestep=args.changeStep)
+    VthFunc = AdaptiveLIFModel(tau=args.tau, alpha=args.alpha)
     # logging set up
     if args.logging == 1:
         savecsv = os.path.join(args.savefolder, "Vth-Adaptive_result_per_image.csv")
         accTimestepCSV = os.path.join(args.savefolder, "Vth-Adaptive_batchAcc_per_time.csv")
         vthTimestepCSV = os.path.join(args.savefolder, "Vth-Adaptive_Vth_per_time.csv")
         fireTimestepCSV = os.path.join(args.savefolder, "Vth-Adaptive_Firecount_per_time.csv")
+        energyTimestepCSV = os.path.join(args.savefolder, "Vth-Adaptive_Energy_per_time.csv")
         saveCSVrow(["Vth","index","spike_argmax","label","acc"], savecsv)
 
     # Load Mmodels
@@ -135,12 +139,7 @@ def spike_test(args, trainset, testset,  spikeset, device):
     # SNN Initialize
     inp = torch.ones(1, 3, 32, 32)  # To get neauron size, so simulate as a scalemodel
     model = SpikingVGG16(stdict, block1, block2, bn1, bn2, classifier, inp, device, Vth=args.Vth, Vres=args.Vres, activate=args.activate)
-    if args.load_normalized_weight is None:
-        model.to(device)
-        model = CW_Normalize(args, model, trainset, device)
-        NormalizeSaveName = os.path.join(os.path.dirname(args.load_weight), "normalized.pth.tar")
-        torch.save(model.state_dict(), NormalizeSaveName)
-    else:
+    if args.load_normalized_weight is not None:
         model.load_state_dict(torch.load(args.load_normalized_weight, map_location=torch.device('cpu')))
         model.to(device)
         print("=> Already Normalized")
@@ -156,6 +155,7 @@ def spike_test(args, trainset, testset,  spikeset, device):
         test_data = data[0]
         sp = data[1]
         Acc_step_per_batch = []
+        Energy = []
 
         outspike = torch.zeros(sp[0].size()[0], args.timelength, 10)
         labels = sp[1]
@@ -172,10 +172,11 @@ def spike_test(args, trainset, testset,  spikeset, device):
                 out = model(spike)
                 outspike[:, j, :] = out
                 spikecount = torch.sum(outspike, axis=1)
-                firerate = softmax(spikecount)
-                firerate_softmax = softmax(firerate)
-                entropy = torch.sum(-1 * firerate_softmax * torch.log2(firerate_softmax), dim=1)
-                VthFunc.entropylog(entropy)
+                watchSpikeCount = min((torch.mean(spikecount)/Vth).item()/(j+1), 1)
+                # firerate = softmax(spikecount)
+                # firerate_softmax = softmax(firerate)
+                # entropy = torch.sum(-1 * firerate_softmax * torch.log2(firerate_softmax), dim=1)
+                # VthFunc.entropylog(entropy)
 
             # log acc per step
             if args.logging == 1:
@@ -184,10 +185,12 @@ def spike_test(args, trainset, testset,  spikeset, device):
                 acc_tensor[spikecount_argmax==labels] = 1
                 Acc_step_per_batch.append(acc_tensor.sum().item())
                 model_count, overfire, whole_fire_cnt = model.SaveFireCount(fireTimestepCSV, j)
-            VthFunc.firelog([model_count, overfire])
+                Energy.append(whole_fire_cnt)
+            # VthFunc.firelog([model_count, overfire])
 
             if (j + 1) % args.changeStep == 0:
-                Vth = VthFunc(j+1, Vth)
+                # Vth = VthFunc(j+1, Vth)
+                Vth = VthFunc(watchSpikeCount)
                 model.changeVth(Vth)
             vth_timestep.append(Vth)
 
@@ -210,6 +213,7 @@ def spike_test(args, trainset, testset,  spikeset, device):
             saveCSVrows(saveinfo.tolist(), savecsv)
             saveCSVrow(Acc_step_per_batch, accTimestepCSV)
             saveCSVrow(vth_timestep, vthTimestepCSV)
+            saveCSVrow(Energy, energyTimestepCSV)
 
         acc += acc_tensor.sum().item()
 
